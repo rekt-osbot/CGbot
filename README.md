@@ -127,8 +127,8 @@ This will install all required packages. You'll see some text output as npm down
 
 ```
 # Telegram Bot Configuration
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
-TELEGRAM_CHAT_ID=your_telegram_chat_id_here
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_CHAT_ID=your_telegram_chat_id
 
 # Webhook Security (create any random string)
 WEBHOOK_SECRET=create_a_random_string_here
@@ -164,10 +164,27 @@ Connected to Telegram bot: YourBotName
 
 Keep this terminal window open while using the system.
 
+### Stable Running Mode (Recommended)
+
+To prevent unnecessary restarts that can cause duplicate Telegram notifications, use the stable running mode:
+
+```bash
+npm run start:stable
+```
+
+The stable runner:
+- Monitors the main application process
+- Only restarts if the process truly crashes (with exit code other than 0)
+- Implements cooldown periods between restarts
+- Limits the number of restarts in a given time period
+- Logs all events to `server.log`
+
+This mode is highly recommended for production environments.
+
 ### Making the Server Run in Background (Optional)
 
 - **On Windows**: Use a tool like [PM2](https://pm2.keymetrics.io/) or [Forever](https://github.com/foreversd/forever)
-- **On Mac/Linux**: Use `nohup npm start &` or PM2
+- **On Mac/Linux**: Use `nohup npm run start:stable &` or PM2
 
 ## 🧪 Testing Your Setup
 
@@ -401,30 +418,69 @@ You can extend the system with custom calculators:
 
 ## 🌐 Deployment
 
-### Deploying to a Cloud Provider
+### Railway Deployment (Recommended)
 
-For production use, you can deploy to a cloud provider like Railway, Heroku, or Digital Ocean.
+This application is optimized for Railway deployment with automatic market hours handling. Here's how to set it up:
 
-#### Railway Deployment (Easiest)
+1. **Create a Railway account** at [railway.app](https://railway.app) if you don't have one already
 
-1. **Sign up for [Railway](https://railway.app/)**
-2. **Connect your GitHub repository** or use their CLI tool
-3. **Add environment variables** (same as your .env file)
-4. **Deploy automatically** - Railway handles the rest
+2. **Deploy the application**:
+   - Option 1: Connect your GitHub repository
+     - Fork/clone this repository to your GitHub account
+     - In Railway, click "New Project" → "Deploy from GitHub repo"
+     - Select your repository
+   
+   - Option 2: Deploy with the Railway CLI
+     - Install the Railway CLI: `npm i -g @railway/cli`
+     - Login: `railway login`
+     - Link to your project: `railway link`
+     - Deploy: `railway up`
 
-#### Other Deployment Options
+3. **Set Environment Variables**:
+   - In Railway dashboard, go to your project → Variables
+   - Add the following variables:
+     ```
+     TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+     TELEGRAM_CHAT_ID=your_telegram_chat_id
+     WEBHOOK_SECRET=your_webhook_secret
+     PORT=3000
+     MONGODB_URI=your_mongodb_connection_string (optional)
+     ```
 
-- **Heroku**: Follow [Heroku's Node.js deployment guide](https://devcenter.heroku.com/articles/deploying-nodejs)
-- **Digital Ocean**: Use their App Platform or deploy to a Droplet
-- **AWS/GCP/Azure**: For advanced users who need more control
+4. **Configure Start Command**:
+   - In Railway dashboard, go to your project → Settings
+   - Under "Start Command", enter: `npm run start:stable`
+   - This ensures the application runs with the stable process manager
 
-### Running Behind a Reverse Proxy
+5. **Set up Domain** (optional):
+   - In Railway dashboard, go to your project → Settings → Domains
+   - Generate a custom domain or use the provided Railway domain
 
-If using Nginx or Apache as a reverse proxy:
+Railway will automatically build and deploy your application. The stable process manager will keep your service running during market hours and handle restarts appropriately.
 
-1. Configure your web server to forward requests to your Node.js app port
-2. Set up HTTPS for security
-3. Update the BASE_URL in your .env file
+### Market Hours Operation
+
+The stable runner is configured to run automatically during Indian stock market hours with buffer periods:
+
+- **Market Hours**: Monday-Friday, 9:00 AM to 3:45 PM IST
+- **Operation Window**: 
+  - Starts 15 minutes before market open (8:45 AM IST)
+  - Runs through market hours
+  - Continues 30 minutes after market close (4:15 PM IST)
+- **Behavior**:
+  - On Railway and self-hosted: Only runs during the extended market hours window
+  - Outside market hours: The process sleeps to conserve resources
+  - On weekends: Automatically sleeps until Monday morning
+
+The system will:
+1. Start automatically 15 minutes before market open
+2. Send notifications only when necessary (not on every restart)
+3. Run through the entire trading day
+4. Continue for 30 minutes after market close to capture post-market activity
+5. Shut down gracefully after the post-market period
+6. Sleep during weekends and holidays, automatically waking on the next trading day
+
+This optimization ensures reliable operation during trading hours while minimizing resource usage and unnecessary notifications.
 
 ## 🤝 Support & Contributing
 
@@ -454,7 +510,8 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 | Command | Description |
 |---------|-------------|
-| `npm start` | Start the server |
+| `npm start` | Start the server (basic mode) |
+| `npm run start:stable` | Start the server with automatic crash recovery (recommended for production) |
 | `node test-telegram.js` | Test Telegram connectivity |
 | `node test-multiple-stocks.js single` | Test single stock alert |
 | `node test-multiple-stocks.js symbols` | Test multiple stocks alert |

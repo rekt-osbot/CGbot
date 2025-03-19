@@ -531,13 +531,49 @@ app.get('/daily-summary', async (req, res) => {
 
 // Schedule daily summary at market close (3:30 PM IST)
 function scheduleDailySummary() {
-  // Schedule for 3:30 PM IST (10:00 AM GMT)
-  const dailySummaryJob = schedule.scheduleJob('0 30 15 * * 1-5', async function() {
-    await generateAndSendDailySummary();
-  });
-  
-  console.log('Daily summary scheduled for 3:30 PM IST on weekdays');
-  return dailySummaryJob;
+  try {
+    // Create a lockfile path
+    const lockFilePath = path.join(dataDir, 'summary_lock.txt');
+    
+    // The job that runs at 3:30 PM IST (10:00 UTC)
+    const summaryJob = schedule.scheduleJob('0 10 * * 1-5', async () => {
+      // Check if another instance is already running by testing for a lockfile
+      if (fs.existsSync(lockFilePath)) {
+        console.log('Daily summary already running (lockfile exists)');
+        return;
+      }
+      
+      try {
+        // Create lockfile
+        fs.writeFileSync(lockFilePath, new Date().toISOString());
+        
+        console.log('Running daily summary job');
+        StatusMonitor.recordEvent('scheduledTask', 'Daily summary started');
+        
+        await generateAndSendDailySummary();
+        
+        // Remove lockfile when done
+        if (fs.existsSync(lockFilePath)) {
+          fs.unlinkSync(lockFilePath);
+        }
+      } catch (error) {
+        console.error('Error in scheduled summary job:', error);
+        StatusMonitor.recordError('dailySummaryJob', error.message);
+        
+        // Remove lockfile on error too
+        if (fs.existsSync(lockFilePath)) {
+          fs.unlinkSync(lockFilePath);
+        }
+      }
+    });
+    
+    console.log('Scheduled daily summary job for 3:30 PM IST (10:00 UTC) on weekdays');
+    return summaryJob;
+  } catch (error) {
+    console.error('Error scheduling jobs:', error);
+    StatusMonitor.recordError('scheduling', error.message);
+    return null;
+  }
 }
 
 // Test Telegram endpoint
@@ -1060,57 +1096,159 @@ app.get('/analytics', async (req, res) => {
   `);
 });
 
+// Graceful shutdown handler
+const gracefulShutdown = () => {
+  console.log('Received shutdown signal');
+  StatusMonitor.recordEvent('shutdown', 'Graceful shutdown initiated');
+  
+  // Set a flag to indicate planned shutdown - prevents duplicate notifications
+  global.isShuttingDown = true;
+  
+  // Check current IST time
+  const now = new Date();
+  const istOffset = 330; // IST is UTC+5:30 (330 minutes)
+  const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const istMinutes = (utcMinutes + istOffset) % (24 * 60);
+  const istHour = Math.floor(istMinutes / 60);
+  const istMinute = istMinutes % 60;
+  const istDay = now.getUTCDay(); // 0 is Sunday, 1 is Monday, etc.
+  
+  // Check if it's around market close time (3:45-4:15 PM IST on weekdays)
+  const marketEndMinutes = 15 * 60 + 45; // 3:45 PM in minutes
+  const marketPostCloseMinutes = marketEndMinutes + 30; // 30 min buffer after market close
+  
+  const isAroundMarketClose = 
+    istDay >= 1 && istDay <= 5 && // Monday-Friday
+    istMinutes >= marketEndMinutes && 
+    istMinutes <= marketPostCloseMinutes;
+  
+  // Check if it's weekend
+  const isWeekend = istDay === 0 || istDay === 6; // Sunday or Saturday
+  
+  // Check if it's Friday after market close (special message)
+  const isFridayAfterClose = 
+    istDay === 5 && // Friday
+    istMinutes > marketEndMinutes;
+  
+  // Check if it's a stable runner market close (set by run-stable.js)
+  const isMarketClose = isAroundMarketClose || process.env.MARKET_CLOSE_SHUTDOWN === 'true';
+  
+  // Don't send notification if on Railway or if it's a market close shutdown
+  const isRailway = process.env.RAILWAY_ENVIRONMENT !== undefined;
+  
+  try {
+    // Only send notification if this is NOT a market close shutdown or error restart
+    if (!telegramError && !global.shuttingDownForError && !isMarketClose && !isRailway) {
+      sendTelegramMessage('⚠️ Stock Alerts Service is shutting down for maintenance. Will be back shortly!')
+        .then(() => {
+          server.close(() => {
+            console.log('Server closed');
+            process.exit(0);
+          });
+        })
+        .catch(() => {
+          server.close(() => {
+            console.log('Server closed');
+            process.exit(0);
+          });
+        });
+    } else {
+      // If it's due to market close, send special message
+      if (!telegramError && isMarketClose && !isRailway) {
+        // Select the appropriate message based on day of week
+        let shutdownMessage = '📈 Stock Alerts Service shutting down after market close. Will restart tomorrow before market open.';
+        
+        if (isFridayAfterClose) {
+          shutdownMessage = '📈 Stock Alerts Service shutting down for the weekend. Will restart on Monday before market open.';
+        } else if (isWeekend) {
+          shutdownMessage = '📈 Stock Alerts Service is in weekend mode. Will restart on next trading day.';
+        }
+        
+        sendTelegramMessage(shutdownMessage)
+          .then(() => {
+            server.close(() => {
+              console.log('Server closed after market hours');
+              process.exit(0);
+            });
+          })
+          .catch(() => {
+            server.close(() => {
+              console.log('Server closed after market hours');
+              process.exit(0);
+            });
+          });
+      } else {
+        server.close(() => {
+          console.log('Server closed');
+          process.exit(0);
+        });
+      }
+    }
+
+    // Force close after 10 seconds
+    setTimeout(() => {
+      console.error('Could not close connections in time, forcefully shutting down');
+      process.exit(1);
+    }, 10000);
+  } catch (error) {
+    console.error('Error during shutdown:', error);
+    process.exit(1);
+  }
+};
+
+// Set up signal handlers
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
+
+// Add these global error handlers before app.listen
+process.on('uncaughtException', (error) => {
+  console.error('UNCAUGHT EXCEPTION:', error);
+  StatusMonitor.recordError('uncaughtException', error.message);
+  // Don't exit the process, just log the error
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('UNHANDLED REJECTION:', reason);
+  StatusMonitor.recordError('unhandledRejection', reason);
+  // Don't exit the process, just log the error
+});
+
 // Start the server
-const server = app.listen(PORT, async () => {
+const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Telegram bot token: ${botToken ? `${botToken.substring(0, 5)}...${botToken.substring(botToken.length - 5)}` : 'Not provided'}`);
   console.log(`Telegram chat ID: ${chatId || 'Not provided'}`);
   
-  if (!botToken || !chatId) {
-    console.warn('⚠️ Telegram bot token or chat ID not provided. Telegram messages will not be sent.');
-    telegramError = true;
-  } else {
-    // Test Telegram connection
-    await testTelegramConnection();
-  
-    // Schedule daily summary report
-    scheduleDailySummary();
-  
-    // Send a startup message to Telegram
-    sendTelegramMessage('🚀 Stock Alerts Service is now running!')
-      .then(success => {
-        if (success) {
-          console.log('Startup notification sent to Telegram');
-        } else {
-          console.log('Failed to send startup notification to Telegram');
-        }
-      })
-      .catch(err => {
-        console.error('Error sending startup notification:', err);
-      });
-  }
-});
-
-// Graceful shutdown 
-const gracefulShutdown = () => {
-  console.log('Shutting down gracefully...');
-  server.close(() => {
-    console.log('HTTP server closed');
-    if (!telegramError) {
-      sendTelegramMessage('⚠️ Stock Alerts Service is shutting down!')
-        .then(() => process.exit(0))
-        .catch(() => process.exit(0));
-    } else {
-      process.exit(0);
-    }
-  });
-
-  // Force close after 10 seconds
-  setTimeout(() => {
-    console.error('Could not close connections in time, forcefully shutting down');
-    process.exit(1);
-  }, 10000);
-};
-
-process.on('SIGTERM', gracefulShutdown);
-process.on('SIGINT', gracefulShutdown); 
+  // Test Telegram connection
+  console.log('Testing Telegram connection...');
+  bot.getMe()
+    .then(me => {
+      console.log(`Connected to Telegram as @${me.username}`);
+      
+      // Schedule daily summary
+      const summaryJob = scheduleDailySummary();
+      
+      // Only send startup message if not restarted by the stable runner
+      // and if not running on Railway in production mode
+      const isStableRunner = process.env.STABLE_RUNNER === 'true';
+      const isRailwayProduction = process.env.RAILWAY_ENVIRONMENT === 'production';
+      
+      if (!isStableRunner && !global.startupMessageSent && !isRailwayProduction) {
+        sendTelegramMessage('🚀 Stock Alerts Service is now running!')
+          .then(() => {
+            console.log('Startup notification sent to Telegram');
+            global.startupMessageSent = true;
+          })
+          .catch(err => {
+            console.error('Failed to send startup notification:', err);
+          });
+      } else {
+        console.log('Skipping startup notification (stable runner or Railway production environment)');
+        global.startupMessageSent = true;
+      }
+    })
+    .catch(error => {
+      console.error('Failed to connect to Telegram:', error);
+      telegramError = true;
+    });
+}); 

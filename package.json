@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "start:stable": "node run-stable.js",
     "dev": "nodemon index.js",
     "test:single": "node test-multiple-stocks.js single",
     "test:symbols": "node test-multiple-stocks.js symbols",
