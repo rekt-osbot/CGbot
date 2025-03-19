@@ -423,40 +423,64 @@ You can extend the system with custom calculators:
 This application is optimized for Railway deployment with automatic market hours handling. Here's how to set it up:
 
 1. **Create a Railway account** at [railway.app](https://railway.app) if you don't have one already
-
-2. **Deploy the application**:
-   - Option 1: Connect your GitHub repository
-     - Fork/clone this repository to your GitHub account
+2. **Deploy your application** using one of these methods:
+   - Option 1: Deploy directly from GitHub
+     - Push your code to a GitHub repository
      - In Railway, click "New Project" → "Deploy from GitHub repo"
      - Select your repository
-   
    - Option 2: Deploy with the Railway CLI
      - Install the Railway CLI: `npm i -g @railway/cli`
      - Login: `railway login`
      - Link to your project: `railway link`
      - Deploy: `railway up`
-
-3. **Set Environment Variables**:
+3. **Set up environment variables**
    - In Railway dashboard, go to your project → Variables
-   - Add the following variables:
-     ```
-     TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-     TELEGRAM_CHAT_ID=your_telegram_chat_id
-     WEBHOOK_SECRET=your_webhook_secret
-     PORT=3000
-     MONGODB_URI=your_mongodb_connection_string (optional)
-     ```
+   - Add all the required variables from `.env.example`:
+     - `TELEGRAM_BOT_TOKEN`
+     - `TELEGRAM_CHAT_ID`
+     - `WEBHOOK_SECRET`
+     - `MONGODB_URI` (if using MongoDB)
+   - Add `RAILWAY_ENVIRONMENT=true` to optimize for Railway
 
-4. **Configure Start Command**:
+4. **Configure project settings**
    - In Railway dashboard, go to your project → Settings
-   - Under "Start Command", enter: `npm run start:stable`
-   - This ensures the application runs with the stable process manager
+   - Set memory limit to at least 512 MB
+   - Enable "Always On" if you want 24/7 availability (app will still only run during market hours)
 
-5. **Set up Domain** (optional):
+5. **Set up your webhook endpoint**
    - In Railway dashboard, go to your project → Settings → Domains
    - Generate a custom domain or use the provided Railway domain
+   - Use this URL as your webhook endpoint in ChartInk or other services
 
 Railway will automatically build and deploy your application. The stable process manager will keep your service running during market hours and handle restarts appropriately.
+
+### Troubleshooting Railway Deployments
+
+If you encounter build failures when connecting your Git repository to Railway, try these solutions:
+
+1. **Manual deployment first**:
+   - Run `railway up` from your local machine to test the deployment
+   - Once successful, try connecting the Git repository again
+
+2. **Check build logs**:
+   - In Railway dashboard, go to your project → Deployments
+   - Click on the failed deployment to view logs
+   - Look for specific error messages
+
+3. **Alternative configuration files**:
+   This repository includes multiple configuration options for Railway:
+   - `railway.json` - Primary configuration
+   - `railway.toml` - Alternative TOML format
+   - `Procfile` - Simple process definition
+   - `nixpacks.toml` - Custom build instructions
+
+4. **Environment variables**:
+   - Ensure all required environment variables are set in Railway
+   - Double-check for typos or missing variables
+
+5. **Node.js version**:
+   - Railway uses the Node.js version specified in package.json
+   - Ensure your `engines` field specifies a compatible version
 
 ### Market Hours Operation
 

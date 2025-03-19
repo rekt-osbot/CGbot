@@ -9,7 +9,8 @@
     "dev": "nodemon index.js",
     "test:single": "node test-multiple-stocks.js single",
     "test:symbols": "node test-multiple-stocks.js symbols",
-    "generate-summary": "node generate-summary.js"
+    "generate-summary": "node generate-summary.js",
+    "postinstall": "echo 'Installation completed successfully'"
   },
   "engines": {
     "node": ">=16.0.0"

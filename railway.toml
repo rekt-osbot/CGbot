@@ -1,0 +1,14 @@
+[build]
+builder = "nixpacks"
+buildCommand = "npm ci"
+
+[deploy]
+startCommand = "node run-stable.js"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+[environments]
+NODE_ENV = "production"
+RAILWAY_ENVIRONMENT = "true" 

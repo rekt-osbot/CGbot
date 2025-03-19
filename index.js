@@ -643,7 +643,19 @@ app.get('/test-multiple', async (req, res) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok' });
+  // Collect system health information
+  const health = {
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+    environment: {
+      isRailway: process.env.RAILWAY_ENVIRONMENT === 'true',
+      node: process.version
+    }
+  };
+  
+  res.status(200).json(health);
 });
 
 // Status API endpoint (JSON)
