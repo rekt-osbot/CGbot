@@ -13,7 +13,7 @@
     "postinstall": "echo 'Installation completed successfully'"
   },
   "engines": {
-    "node": ">=16.0.0"
+    "node": "18.x"
   },
   "keywords": [
     "stocks",
