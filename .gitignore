@@ -1,21 +1,19 @@
 # Dependencies
 node_modules/
-npm-debug.log
-yarn-debug.log
-yarn-error.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Environment variables
 .env
 .env.local
-.env.development
-.env.test
-.env.production
+.env.development.local
+.env.test.local
+.env.production.local
 
-# Data and backups
-data/
-*.json
-!package.json
-!package-lock.json
+# Data files
+data/*.json
+data/backups/
 
 # Logs
 logs
@@ -26,6 +24,30 @@ pids
 *.pid
 *.seed
 *.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# dotenv environment variables file
+.env
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
 
 # OS specific
 .DS_Store

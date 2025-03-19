@@ -7,6 +7,9 @@ const StockDataService = require('./stockData');
 const StockSummary = require('./stockSummary');
 const path = require('path');
 const fs = require('fs');
+const StatusMonitor = require('./status');
+const Analytics = require('./analytics');
+const Database = require('./database');
 
 // Initialize Express app
 const app = express();
@@ -228,24 +231,6 @@ async function testTelegramConnection() {
   }
 }
 
-// Schedule daily summary at market close (3:30 PM IST)
-function scheduleDailySummary() {
-  // Schedule for 3:30 PM IST (10:00 AM GMT)
-  const dailySummaryJob = schedule.scheduleJob('0 30 15 * * 1-5', async function() {
-    console.log('Generating daily summary report...');
-    try {
-      const summaryMessage = await StockSummary.generateDailySummary();
-      await sendTelegramMessage(summaryMessage);
-      console.log('Daily summary sent successfully');
-    } catch (error) {
-      console.error('Error sending daily summary:', error);
-    }
-  });
-  
-  console.log('Daily summary scheduled for 3:30 PM IST on weekdays');
-  return dailySummaryJob;
-}
-
 // Process a single stock alert
 async function processSingleStock(symbol, scanName) {
   // Get current stock information
@@ -314,6 +299,9 @@ app.post('/webhook', async (req, res) => {
     if (WEBHOOK_SECRET && providedSecret !== WEBHOOK_SECRET) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
+    
+    // Record webhook received in status monitor
+    StatusMonitor.recordWebhook();
     
     const alertData = req.body;
     console.log('Received alert:', alertData);
@@ -388,10 +376,29 @@ app.post('/webhook', async (req, res) => {
         return res.status(200).json({ status: 'success', message: 'Test alert processed successfully' });
       }
       
+      // Store in database if it's not a test symbol
+      await Database.storeAlert(validStocksData[0]);
+      
+      // Record alert in status monitor
+      StatusMonitor.recordAlert(validStocksData[0]);
+      
+      // Track in analytics
+      Analytics.trackAlert(validStocksData[0]);
+      
       messageSent = await sendTelegramMessage(message);
     } else {
       // Multiple stocks alert
       message = formatMultipleStocksMessage(validStocksData, scanName);
+      
+      // Store each stock in database
+      for (const stockData of validStocksData) {
+        await Database.storeAlert(stockData);
+        Analytics.trackAlert(stockData);
+      }
+      
+      // Record multiple alerts in status monitor
+      StatusMonitor.recordAlert(validStocksData);
+      
       messageSent = await sendTelegramMessage(message);
     }
     
@@ -410,6 +417,7 @@ app.post('/webhook', async (req, res) => {
     }
   } catch (error) {
     console.error('Error processing webhook:', error);
+    StatusMonitor.recordError('Webhook processing', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -455,14 +463,55 @@ app.get('/check/:symbol', async (req, res) => {
   }
 });
 
+// Generate and send daily summary
+async function generateAndSendDailySummary() {
+  try {
+    console.log('Generating daily summary report...');
+    const summaryMessage = await StockSummary.generateDailySummary();
+    
+    // Store summary in database
+    const summaryData = {
+      totalAlerts: Object.keys(StockSummary.alertedStocks).length,
+      summaryText: summaryMessage
+    };
+    
+    // Get performance metrics from analytics
+    const analyticsSummary = Analytics.getSummary('day');
+    
+    if (!analyticsSummary.error) {
+      summaryData.successfulAlerts = analyticsSummary.topStocks ? analyticsSummary.topStocks.length : 0;
+      summaryData.avgPerformance = analyticsSummary.avgGain || 0;
+      summaryData.bestPerformer = analyticsSummary.bestPerformer;
+      summaryData.worstPerformer = analyticsSummary.worstPerformer;
+      summaryData.topStocks = analyticsSummary.topStocks;
+    }
+    
+    // Store in database
+    await Database.storeSummary(summaryData);
+    
+    // Send to Telegram
+    const sent = await sendTelegramMessage(summaryMessage);
+    
+    if (sent) {
+      console.log('Daily summary sent successfully');
+      return true;
+    } else {
+      console.error('Failed to send daily summary to Telegram');
+      return false;
+    }
+  } catch (error) {
+    console.error('Error generating daily summary:', error);
+    StatusMonitor.recordError('Daily summary generation', error);
+    return false;
+  }
+}
+
 // Manually trigger daily summary report
 app.get('/daily-summary', async (req, res) => {
   try {
-    console.log('Generating daily summary report (manual trigger)...');
-    const summaryMessage = await StockSummary.generateDailySummary();
+    const result = await generateAndSendDailySummary();
     
-    const sent = await sendTelegramMessage(summaryMessage);
-    if (sent) {
+    if (result) {
       res.status(200).json({ 
         status: 'success', 
         message: 'Daily summary generated and sent to Telegram'
@@ -470,15 +519,26 @@ app.get('/daily-summary', async (req, res) => {
     } else {
       res.status(500).json({ 
         status: 'error', 
-        message: 'Failed to send daily summary to Telegram',
-        summary: summaryMessage
+        message: 'Failed to send daily summary to Telegram'
       });
     }
   } catch (error) {
     console.error('Error generating daily summary:', error);
+    StatusMonitor.recordError('Manual daily summary', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// Schedule daily summary at market close (3:30 PM IST)
+function scheduleDailySummary() {
+  // Schedule for 3:30 PM IST (10:00 AM GMT)
+  const dailySummaryJob = schedule.scheduleJob('0 30 15 * * 1-5', async function() {
+    await generateAndSendDailySummary();
+  });
+  
+  console.log('Daily summary scheduled for 3:30 PM IST on weekdays');
+  return dailySummaryJob;
+}
 
 // Test Telegram endpoint
 app.get('/test-telegram', async (req, res) => {
@@ -548,6 +608,456 @@ app.get('/test-multiple', async (req, res) => {
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok' });
+});
+
+// Status API endpoint (JSON)
+app.get('/api/status', (req, res) => {
+  StatusMonitor.recordHealthCheck();
+  res.json(StatusMonitor.getStatus());
+});
+
+// Analytics API endpoint (JSON)
+app.get('/api/analytics', (req, res) => {
+  const period = req.query.period || 'all';
+  res.json(Analytics.getSummary(period));
+});
+
+// Status page endpoint (HTML UI)
+app.get('/status', (req, res) => {
+  // Record health check
+  StatusMonitor.recordHealthCheck();
+  
+  // Get status data
+  const statusData = StatusMonitor.getStatus();
+  
+  // Return HTML page
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Stock Alerts System Status</title>
+      <style>
+        body {
+          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+          line-height: 1.6;
+          color: #333;
+          max-width: 1200px;
+          margin: 0 auto;
+          padding: 20px;
+        }
+        h1, h2, h3 {
+          color: #0066cc;
+        }
+        .status-card {
+          background-color: #f9f9f9;
+          border-radius: 8px;
+          padding: 20px;
+          margin-bottom: 20px;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .metrics {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+          gap: 15px;
+          margin: 15px 0;
+        }
+        .metric {
+          background-color: #fff;
+          padding: 15px;
+          border-radius: 6px;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        .metric h3 {
+          margin-top: 0;
+          font-size: 14px;
+          color: #666;
+          text-transform: uppercase;
+        }
+        .metric p {
+          margin-bottom: 0;
+          font-size: 24px;
+          font-weight: 600;
+          color: #0066cc;
+        }
+        .status-indicator {
+          display: inline-block;
+          width: 12px;
+          height: 12px;
+          border-radius: 50%;
+          margin-right: 8px;
+        }
+        .operational {
+          background-color: #4caf50;
+        }
+        .degraded {
+          background-color: #ff9800;
+        }
+        table {
+          width: 100%;
+          border-collapse: collapse;
+          margin: 15px 0;
+        }
+        th, td {
+          text-align: left;
+          padding: 12px 15px;
+          border-bottom: 1px solid #ddd;
+        }
+        th {
+          background-color: #f2f2f2;
+          font-weight: 600;
+        }
+        tr:hover {
+          background-color: #f5f5f5;
+        }
+        .footer {
+          margin-top: 30px;
+          font-size: 14px;
+          color: #666;
+          text-align: center;
+        }
+        .refresh-button {
+          display: inline-block;
+          padding: 8px 16px;
+          background-color: #0066cc;
+          color: white;
+          border-radius: 4px;
+          text-decoration: none;
+          font-weight: 500;
+        }
+      </style>
+    </head>
+    <body>
+      <h1>Stock Alerts System Status</h1>
+      
+      <div class="status-card">
+        <h2>
+          <span class="status-indicator ${statusData.status === 'operational' ? 'operational' : 'degraded'}"></span>
+          System Status: ${statusData.status === 'operational' ? 'Operational' : 'Degraded'}
+        </h2>
+        <p>Uptime: ${statusData.uptime}</p>
+        <p>Last updated: ${new Date(statusData.currentTime).toLocaleString()}</p>
+        <a href="/status" class="refresh-button">Refresh Status</a>
+      </div>
+      
+      <div class="status-card">
+        <h2>System Metrics</h2>
+        <div class="metrics">
+          <div class="metric">
+            <h3>Alerts Sent</h3>
+            <p>${statusData.metrics.alertsSent}</p>
+          </div>
+          <div class="metric">
+            <h3>Webhooks Received</h3>
+            <p>${statusData.metrics.webhooksReceived}</p>
+          </div>
+          <div class="metric">
+            <h3>Telegram Errors</h3>
+            <p>${statusData.metrics.telegramErrors}</p>
+          </div>
+          <div class="metric">
+            <h3>Data Fetch Errors</h3>
+            <p>${statusData.metrics.dataFetchErrors}</p>
+          </div>
+          <div class="metric">
+            <h3>Memory Usage</h3>
+            <p>${statusData.system.memoryUsage.heapUsed}</p>
+          </div>
+          <div class="metric">
+            <h3>CPU Load (1m)</h3>
+            <p>${statusData.system.cpuLoad['1m']}</p>
+          </div>
+        </div>
+      </div>
+      
+      <div class="status-card">
+        <h2>Recent Alerts</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Symbols</th>
+              <th>Scan</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${statusData.recentAlerts.map(alert => `
+              <tr>
+                <td>${new Date(alert.timestamp).toLocaleString()}</td>
+                <td>${Array.isArray(alert.symbols) ? alert.symbols.join(', ') : alert.symbols}</td>
+                <td>${alert.scanName}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      
+      ${statusData.recentErrors.length > 0 ? `
+        <div class="status-card">
+          <h2>Recent Errors</h2>
+          ${statusData.recentErrors.map(error => `
+            <div class="error">
+              <strong>${new Date(error.timestamp).toLocaleString()}</strong>
+              <p>${error.context}: ${error.message}</p>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
+      
+      <div class="status-card">
+        <h2>System Information</h2>
+        <table>
+          <tr>
+            <td>Platform</td>
+            <td>${statusData.system.platform}</td>
+          </tr>
+          <tr>
+            <td>Node.js Version</td>
+            <td>${statusData.system.nodeVersion}</td>
+          </tr>
+          <tr>
+            <td>Memory</td>
+            <td>${statusData.system.freeMemory} free of ${statusData.system.totalMemory}</td>
+          </tr>
+          <tr>
+            <td>Start Time</td>
+            <td>${new Date(statusData.startTime).toLocaleString()}</td>
+          </tr>
+        </table>
+      </div>
+      
+      <div class="footer">
+        <p>Stock Alerts System - <a href="/analytics">View Analytics</a> | <a href="/health">Health Check</a></p>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
+// Analytics dashboard endpoint (HTML UI)
+app.get('/analytics', async (req, res) => {
+  // Get the period from query param (default to 'all')
+  const period = req.query.period || 'all';
+  
+  // Get analytics summary
+  const analytics = Analytics.getSummary(period);
+  
+  // Return HTML page
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Stock Alerts Analytics</title>
+      <style>
+        body {
+          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+          line-height: 1.6;
+          color: #333;
+          max-width: 1200px;
+          margin: 0 auto;
+          padding: 20px;
+        }
+        h1, h2, h3 {
+          color: #0066cc;
+        }
+        .card {
+          background-color: #f9f9f9;
+          border-radius: 8px;
+          padding: 20px;
+          margin-bottom: 20px;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .metrics {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+          gap: 15px;
+          margin: 15px 0;
+        }
+        .metric {
+          background-color: #fff;
+          padding: 15px;
+          border-radius: 6px;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        .metric h3 {
+          margin-top: 0;
+          font-size: 14px;
+          color: #666;
+          text-transform: uppercase;
+        }
+        .metric p {
+          margin-bottom: 0;
+          font-size: 24px;
+          font-weight: 600;
+          color: #0066cc;
+        }
+        .metric p.positive {
+          color: #4caf50;
+        }
+        .metric p.negative {
+          color: #f44336;
+        }
+        table {
+          width: 100%;
+          border-collapse: collapse;
+          margin: 15px 0;
+        }
+        th, td {
+          text-align: left;
+          padding: 12px 15px;
+          border-bottom: 1px solid #ddd;
+        }
+        th {
+          background-color: #f2f2f2;
+          font-weight: 600;
+        }
+        tr:hover {
+          background-color: #f5f5f5;
+        }
+        .period-selector {
+          margin-bottom: 20px;
+        }
+        .period-selector a {
+          display: inline-block;
+          padding: 8px 16px;
+          margin-right: 10px;
+          background-color: #f2f2f2;
+          color: #333;
+          border-radius: 4px;
+          text-decoration: none;
+          font-weight: 500;
+          transition: background-color 0.3s;
+        }
+        .period-selector a.active {
+          background-color: #0066cc;
+          color: white;
+        }
+        .period-selector a:hover {
+          background-color: #e0e0e0;
+        }
+        .period-selector a.active:hover {
+          background-color: #0055aa;
+        }
+        .footer {
+          margin-top: 30px;
+          font-size: 14px;
+          color: #666;
+          text-align: center;
+        }
+      </style>
+    </head>
+    <body>
+      <h1>Stock Alerts Analytics</h1>
+      
+      <div class="period-selector">
+        <a href="/analytics?period=day" class="${period === 'day' ? 'active' : ''}">Today</a>
+        <a href="/analytics?period=week" class="${period === 'week' ? 'active' : ''}">This Week</a>
+        <a href="/analytics?period=month" class="${period === 'month' ? 'active' : ''}">This Month</a>
+        <a href="/analytics?period=all" class="${period === 'all' ? 'active' : ''}">All Time</a>
+      </div>
+      
+      <div class="card">
+        <h2>Performance Summary</h2>
+        <div class="metrics">
+          <div class="metric">
+            <h3>Total Alerts</h3>
+            <p>${analytics.totalAlerts || 0}</p>
+          </div>
+          <div class="metric">
+            <h3>Success Rate</h3>
+            <p>${analytics.successRate ? analytics.successRate.toFixed(1) + '%' : 'N/A'}</p>
+          </div>
+          <div class="metric">
+            <h3>Avg. Gain</h3>
+            <p class="positive">${analytics.avgGain ? '+' + analytics.avgGain.toFixed(2) + '%' : 'N/A'}</p>
+          </div>
+          <div class="metric">
+            <h3>Avg. Loss</h3>
+            <p class="negative">${analytics.avgLoss ? analytics.avgLoss.toFixed(2) + '%' : 'N/A'}</p>
+          </div>
+        </div>
+      </div>
+      
+      ${analytics.topStocks && analytics.topStocks.length > 0 ? `
+        <div class="card">
+          <h2>Top Performing Stocks</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Performance</th>
+                <th>Success Rate</th>
+                <th>Alerts</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${analytics.topStocks.map(stock => `
+                <tr>
+                  <td>${stock.symbol}</td>
+                  <td>${stock.performance > 0 ? '+' : ''}${stock.performance.toFixed(2)}%</td>
+                  <td>${stock.successRate.toFixed(1)}%</td>
+                  <td>${stock.alerts}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      ` : ''}
+      
+      ${analytics.topScans && analytics.topScans.length > 0 ? `
+        <div class="card">
+          <h2>Top Performing Scans</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Scan</th>
+                <th>Performance</th>
+                <th>Success Rate</th>
+                <th>Alerts</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${analytics.topScans.map(scan => `
+                <tr>
+                  <td>${scan.name}</td>
+                  <td>${scan.performance > 0 ? '+' : ''}${scan.performance.toFixed(2)}%</td>
+                  <td>${scan.successRate.toFixed(1)}%</td>
+                  <td>${scan.alerts}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      ` : ''}
+      
+      ${analytics.bestPerformer ? `
+        <div class="card">
+          <h2>Best & Worst Performers</h2>
+          <div class="metrics">
+            <div class="metric">
+              <h3>Best Performer</h3>
+              <p class="positive">${analytics.bestPerformer.symbol}: ${analytics.bestPerformer.performance.toFixed(2)}%</p>
+            </div>
+            ${analytics.worstPerformer ? `
+              <div class="metric">
+                <h3>Worst Performer</h3>
+                <p class="negative">${analytics.worstPerformer.symbol}: ${analytics.worstPerformer.performance.toFixed(2)}%</p>
+              </div>
+            ` : ''}
+          </div>
+        </div>
+      ` : ''}
+      
+      <div class="footer">
+        <p>Last updated: ${analytics.lastUpdated ? new Date(analytics.lastUpdated).toLocaleString() : 'N/A'}</p>
+        <p><a href="/status">System Status</a> | <a href="/health">Health Check</a></p>
+      </div>
+    </body>
+    </html>
+  `);
 });
 
 // Start the server

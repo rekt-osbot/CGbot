@@ -12,6 +12,45 @@ A Node.js application that integrates with Telegram to provide real-time stock a
 - 🛡️ **Stop Loss Tracking**: Automatic calculation of optimal stop loss levels
 - 📉 **Performance Analytics**: Track which alerts performed best throughout the day
 
+## Additional Features
+
+### Status Monitoring Dashboard
+
+The system now includes a comprehensive status monitoring dashboard that tracks:
+
+- **System Health**: Real-time information about the application's uptime, memory usage, CPU load, etc.
+- **Alert Metrics**: Track the number of alerts sent, webhooks received, and more.
+- **Error Tracking**: Monitor and troubleshoot issues with the application.
+
+Access the dashboard at `/status` to view all this information in a clean, user-friendly interface.
+
+### Performance Analytics
+
+Track the performance of your stock alerts with detailed analytics:
+
+- **Success Rate**: See how many of your alerts resulted in successful trades.
+- **Top Performers**: Identify which stocks and scan types perform best.
+- **Historical Data**: View performance trends over different time periods (day, week, month, all-time).
+
+Access analytics at `/analytics` to get insights into your trading strategy's effectiveness.
+
+### MongoDB Integration
+
+For better data persistence and scalability, the system now supports MongoDB:
+
+1. **Data Storage**: Alerts and summaries are stored in MongoDB for long-term access.
+2. **Automatic Fallback**: If MongoDB is unavailable, data is backed up locally.
+3. **Free Tier Compatible**: Works with MongoDB Atlas free tier for cloud storage.
+
+To enable MongoDB:
+
+1. Create a free MongoDB Atlas account at [https://www.mongodb.com/cloud/atlas/register](https://www.mongodb.com/cloud/atlas/register)
+2. Set up a cluster and get your connection string
+3. Add your connection string to your environment variables:
+   ```
+   MONGODB_URI=mongodb+srv://username:password@cluster0.mongodb.net/stockalerts?retryWrites=true&w=majority
+   ```
+
 ## Getting Started
 
 ### Prerequisites
@@ -39,6 +78,7 @@ A Node.js application that integrates with Telegram to provide real-time stock a
    TELEGRAM_CHAT_ID=your-chat-id
    WEBHOOK_SECRET=optional-secret-for-webhook-authentication
    PORT=3000
+   MONGODB_URI=mongodb+srv://username:password@cluster0.mongodb.net/stockalerts?retryWrites=true&w=majority
    ```
 
 4. Start the server:
@@ -214,4 +254,14 @@ Once deployed, you can set up your stock data provider to send alerts to:
 https://yourapp.railway.app/webhook
 ```
 
-If you set a webhook secret, remember to configure your provider to include the `x-webhook-secret` header with your secret value. 
+If you set a webhook secret, remember to configure your provider to include the `x-webhook-secret` header with your secret value.
+
+## Available Commands
+
+```
+npm start             # Start the application in production mode
+npm run dev           # Start the application with nodemon for development
+npm run test:single   # Test a single stock alert
+npm run test:symbols  # Test multiple stocks alert
+npm run generate-summary  # Manually generate and send a daily summary
+``` 

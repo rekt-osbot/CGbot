@@ -11,6 +11,7 @@ async function testWebhook(format = 'symbols') {
     let url, data;
     
     console.log(`Testing webhook with ${format} format...`);
+    console.log(`Using base URL: ${baseURL}`);
     
     if (format === 'single') {
       // Test with a single stock
@@ -36,7 +37,10 @@ async function testWebhook(format = 'symbols') {
     const headers = {};
     if (process.env.WEBHOOK_SECRET) {
       headers['x-webhook-secret'] = process.env.WEBHOOK_SECRET;
+      console.log('Added webhook secret to request headers');
     }
+    
+    console.log(`Sending request to: ${url}`);
     
     // Send the webhook
     const response = await axios.post(url, data, { headers });
@@ -46,7 +50,12 @@ async function testWebhook(format = 'symbols') {
   } catch (error) {
     console.error('Error sending test webhook:', error.message);
     if (error.response) {
+      console.error('Response status:', error.response.status);
       console.error('Response data:', error.response.data);
+    } else if (error.request) {
+      console.error('No response received. Is the server running?');
+    } else {
+      console.error('Error details:', error);
     }
   }
 }
