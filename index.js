@@ -709,7 +709,379 @@ app.get('/health', (req, res) => {
     }
   };
   
-  res.status(200).json(health);
+  // Format uptime
+  const uptime = process.uptime();
+  const days = Math.floor(uptime / 86400);
+  const hours = Math.floor((uptime % 86400) / 3600);
+  const minutes = Math.floor((uptime % 3600) / 60);
+  const seconds = Math.floor(uptime % 60);
+  const uptimeString = `${days}d ${hours}h ${minutes}m ${seconds}s`;
+  
+  // Format memory
+  const formatMemory = (bytes) => {
+    return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+  };
+  
+  // Check if JSON response is requested
+  if (req.query.format === 'json') {
+    return res.status(200).json(health);
+  }
+  
+  // Render HTML response
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>System Health Dashboard</title>
+      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+      <style>
+        :root {
+          --primary: #4361ee;
+          --success: #2ecc71;
+          --warning: #f39c12;
+          --danger: #e74c3c;
+          --light: #f8f9fa;
+          --dark: #343a40;
+        }
+        
+        * {
+          box-sizing: border-box;
+          margin: 0;
+          padding: 0;
+        }
+        
+        body {
+          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+          line-height: 1.6;
+          color: var(--dark);
+          background-color: #f5f7fb;
+          padding: 0;
+          margin: 0;
+        }
+        
+        .container {
+          max-width: 1200px;
+          margin: 0 auto;
+          padding: 2rem;
+        }
+        
+        header {
+          background-color: white;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+          padding: 1.5rem 0;
+          margin-bottom: 2rem;
+        }
+        
+        .header-container {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          max-width: 1200px;
+          margin: 0 auto;
+          padding: 0 2rem;
+        }
+        
+        h1 {
+          font-size: 1.8rem;
+          color: var(--primary);
+          margin-bottom: 0.5rem;
+        }
+        
+        h2 {
+          font-size: 1.4rem;
+          margin-bottom: 1rem;
+          color: var(--dark);
+        }
+        
+        .status-badge {
+          display: inline-block;
+          padding: 0.4rem 1rem;
+          border-radius: 50px;
+          font-weight: 600;
+          font-size: 0.9rem;
+        }
+        
+        .status-badge.healthy {
+          background-color: rgba(46, 204, 113, 0.2);
+          color: var(--success);
+        }
+        
+        .status-badge.warning {
+          background-color: rgba(243, 156, 18, 0.2);
+          color: var(--warning);
+        }
+        
+        .status-badge.critical {
+          background-color: rgba(231, 76, 60, 0.2);
+          color: var(--danger);
+        }
+        
+        .panel {
+          background-color: white;
+          border-radius: 8px;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+          padding: 1.5rem;
+          margin-bottom: 1.5rem;
+        }
+        
+        .panel-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 1.2rem;
+          padding-bottom: 0.8rem;
+          border-bottom: 1px solid rgba(0,0,0,0.05);
+        }
+        
+        .panel-title {
+          font-size: 1.2rem;
+          font-weight: 600;
+          color: var(--primary);
+          display: flex;
+          align-items: center;
+        }
+        
+        .panel-title i {
+          margin-right: 0.5rem;
+        }
+        
+        .stats-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+          gap: 1.5rem;
+        }
+        
+        .stat-card {
+          background-color: #f8f9fa;
+          border-radius: 8px;
+          padding: 1.2rem;
+          transition: all 0.3s ease;
+        }
+        
+        .stat-card:hover {
+          transform: translateY(-5px);
+          box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        
+        .stat-title {
+          font-size: 0.9rem;
+          color: #6c757d;
+          margin-bottom: 0.5rem;
+        }
+        
+        .stat-value {
+          font-size: 1.8rem;
+          font-weight: 700;
+          color: var(--primary);
+        }
+        
+        .stat-subtitle {
+          font-size: 0.85rem;
+          color: #6c757d;
+          margin-top: 0.5rem;
+        }
+        
+        .memory-bars {
+          margin-top: 1rem;
+        }
+        
+        .memory-bar {
+          margin-bottom: 1rem;
+        }
+        
+        .memory-bar-label {
+          display: flex;
+          justify-content: space-between;
+          margin-bottom: 0.3rem;
+          font-size: 0.9rem;
+        }
+        
+        .memory-bar-track {
+          height: 8px;
+          width: 100%;
+          background-color: rgba(67, 97, 238, 0.1);
+          border-radius: 4px;
+          overflow: hidden;
+        }
+        
+        .memory-bar-fill {
+          height: 100%;
+          background-color: var(--primary);
+          border-radius: 4px;
+        }
+        
+        .nav-links {
+          display: flex;
+          gap: 1.5rem;
+        }
+        
+        .nav-link {
+          color: var(--dark);
+          text-decoration: none;
+          font-weight: 500;
+          transition: color 0.2s;
+          display: flex;
+          align-items: center;
+        }
+        
+        .nav-link i {
+          margin-right: 0.5rem;
+        }
+        
+        .nav-link:hover {
+          color: var(--primary);
+        }
+        
+        .current-time {
+          font-size: 0.9rem;
+          color: #6c757d;
+          text-align: center;
+          margin-top: 2rem;
+        }
+        
+        .refresh-button {
+          background-color: var(--primary);
+          color: white;
+          border: none;
+          border-radius: 4px;
+          padding: 0.5rem 1rem;
+          font-size: 0.9rem;
+          cursor: pointer;
+          transition: background-color 0.2s;
+        }
+        
+        .refresh-button:hover {
+          background-color: #2c49c7;
+        }
+        
+        .api-link {
+          display: inline-block;
+          font-size: 0.85rem;
+          color: var(--primary);
+          text-decoration: none;
+          margin-top: 1rem;
+        }
+        
+        .api-link:hover {
+          text-decoration: underline;
+        }
+        
+        @media (max-width: 768px) {
+          .stats-grid {
+            grid-template-columns: 1fr;
+          }
+          
+          .header-container {
+            flex-direction: column;
+            text-align: center;
+          }
+          
+          .nav-links {
+            margin-top: 1rem;
+          }
+        }
+      </style>
+    </head>
+    <body>
+      <header>
+        <div class="header-container">
+          <div>
+            <h1>CGNSEAlert System Health</h1>
+            <span class="status-badge healthy">
+              <i class="fas fa-check-circle"></i> System Operational
+            </span>
+          </div>
+          <div class="nav-links">
+            <a href="/status" class="nav-link"><i class="fas fa-chart-line"></i> Dashboard</a>
+            <a href="/analytics" class="nav-link"><i class="fas fa-chart-pie"></i> Analytics</a>
+            <a href="/test-webhook-dashboard" class="nav-link"><i class="fas fa-paper-plane"></i> Test</a>
+          </div>
+        </div>
+      </header>
+      
+      <div class="container">
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <i class="fas fa-server"></i> System Overview
+            </div>
+            <button class="refresh-button" onclick="window.location.reload()">
+              <i class="fas fa-sync-alt"></i> Refresh
+            </button>
+          </div>
+          
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-title">UPTIME</div>
+              <div class="stat-value">${uptimeString}</div>
+              <div class="stat-subtitle">Since ${new Date(Date.now() - (uptime * 1000)).toLocaleString()}</div>
+            </div>
+            
+            <div class="stat-card">
+              <div class="stat-title">ENVIRONMENT</div>
+              <div class="stat-value">${health.environment.isRailway ? 'Railway' : 'Local'}</div>
+              <div class="stat-subtitle">Node ${health.environment.node}</div>
+            </div>
+            
+            <div class="stat-card">
+              <div class="stat-title">STATUS</div>
+              <div class="stat-value" style="color: var(--success);">Healthy</div>
+              <div class="stat-subtitle">All systems operational</div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <i class="fas fa-memory"></i> Memory Usage
+            </div>
+          </div>
+          
+          <div class="memory-bars">
+            <div class="memory-bar">
+              <div class="memory-bar-label">
+                <span>Heap Used</span>
+                <span>${formatMemory(health.memory.heapUsed)}</span>
+              </div>
+              <div class="memory-bar-track">
+                <div class="memory-bar-fill" style="width: ${(health.memory.heapUsed / health.memory.heapTotal * 100).toFixed(1)}%"></div>
+              </div>
+            </div>
+            
+            <div class="memory-bar">
+              <div class="memory-bar-label">
+                <span>Heap Allocated</span>
+                <span>${formatMemory(health.memory.heapTotal)}</span>
+              </div>
+              <div class="memory-bar-track">
+                <div class="memory-bar-fill" style="width: 100%"></div>
+              </div>
+            </div>
+            
+            <div class="memory-bar">
+              <div class="memory-bar-label">
+                <span>RSS Memory</span>
+                <span>${formatMemory(health.memory.rss)}</span>
+              </div>
+              <div class="memory-bar-track">
+                <div class="memory-bar-fill" style="width: ${(health.memory.rss / (health.memory.heapTotal * 2) * 100).toFixed(1)}%"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <div class="current-time">
+          Last updated: ${new Date().toLocaleString()}
+        </div>
+        
+        <a href="/health?format=json" class="api-link">View JSON API response →</a>
+      </div>
+    </body>
+    </html>
+  `);
 });
 
 // Status API endpoint (JSON)
@@ -783,15 +1155,15 @@ app.get('/status', async (req, res) => {
     let errorLog = '';
     
     if (recentErrors && recentErrors.length > 0) {
-      recentErrors.forEach(err => {
-        errorLog += `<div class="error-item">
-          <span class="error-time">${new Date(err.timestamp).toLocaleTimeString()}</span>
-          <span class="error-type">${err.type}</span>
-          <span class="error-message">${err.message}</span>
-        </div>`;
-      });
+      errorLog = recentErrors.map(err => `
+        <div class="error-item">
+          <div class="error-time">${new Date(err.timestamp).toLocaleTimeString()}</div>
+          <div class="error-type">${err.type}</div>
+          <div class="error-message">${err.message}</div>
+        </div>
+      `).join('');
     } else {
-      errorLog = '<p class="no-errors">No errors recorded recently</p>';
+      errorLog = '<div class="no-errors"><i class="fas fa-check-circle"></i> No errors recorded recently</div>';
     }
     
     // Format last alert time
@@ -803,167 +1175,463 @@ app.get('/status', async (req, res) => {
     // Prepare status HTML
     res.send(`
       <!DOCTYPE html>
-      <html>
+      <html lang="en">
       <head>
-        <title>System Status</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <meta http-equiv="refresh" content="30">
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta http-equiv="refresh" content="60">
+        <title>CGNSEAlert Dashboard</title>
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
         <style>
+          :root {
+            --primary: #4361ee;
+            --success: #2ecc71;
+            --warning: #f39c12;
+            --danger: #e74c3c;
+            --info: #3498db;
+            --light: #f8f9fa;
+            --dark: #343a40;
+            --gray: #6c757d;
+            --border: #e9ecef;
+          }
+          
+          * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+          }
+          
           body {
-            font-family: Arial, sans-serif;
-            max-width: 800px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: var(--dark);
+            background-color: #f5f7fb;
+            padding: 0;
+            margin: 0;
+          }
+          
+          .container {
+            max-width: 1200px;
             margin: 0 auto;
-            padding: 20px;
+            padding: 2rem;
           }
-          .status-container {
-            background-color: #f8f9fa;
-            border-radius: 5px;
-            padding: 20px;
-            margin-bottom: 20px;
+          
+          header {
+            background-color: white;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            padding: 1.5rem 0;
+            margin-bottom: 2rem;
           }
-          .status-container h2 {
-            margin-top: 0;
-            border-bottom: 1px solid #ddd;
-            padding-bottom: 10px;
-          }
-          .status-row {
+          
+          .header-container {
             display: flex;
             justify-content: space-between;
-            margin-bottom: 10px;
-            padding: 5px 0;
-            border-bottom: 1px solid #eee;
+            align-items: center;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 2rem;
           }
-          .status-label {
-            font-weight: bold;
+          
+          h1 {
+            font-size: 1.8rem;
+            color: var(--primary);
+            margin-bottom: 0.5rem;
           }
-          .status-value {
-            text-align: right;
+          
+          h2 {
+            font-size: 1.4rem;
+            margin-bottom: 1rem;
+            color: var(--dark);
           }
-          .healthy {
-            color: #28a745;
+          
+          .status-badge {
+            display: inline-block;
+            padding: 0.4rem 1rem;
+            border-radius: 50px;
+            font-weight: 600;
+            font-size: 0.9rem;
           }
-          .warning {
-            color: #ffc107;
+          
+          .status-badge.healthy {
+            background-color: rgba(46, 204, 113, 0.2);
+            color: var(--success);
           }
-          .error {
-            color: #dc3545;
+          
+          .status-badge.warning {
+            background-color: rgba(243, 156, 18, 0.2);
+            color: var(--warning);
           }
-          .nav {
-            margin-bottom: 20px;
+          
+          .status-badge.danger {
+            background-color: rgba(231, 76, 60, 0.2);
+            color: var(--danger);
           }
-          .nav a {
-            margin-right: 15px;
-            text-decoration: none;
-            color: #2196F3;
+          
+          .panel {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
           }
-          .error-log {
+          
+          .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.2rem;
+            padding-bottom: 0.8rem;
+            border-bottom: 1px solid rgba(0,0,0,0.05);
+          }
+          
+          .panel-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+          }
+          
+          .panel-title i {
+            margin-right: 0.5rem;
+          }
+          
+          .grid-layout {
+            display: grid;
+            grid-template-columns: 3fr 2fr;
+            gap: 1.5rem;
+          }
+          
+          .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 1.2rem;
+          }
+          
+          .stat-card {
             background-color: #f8f9fa;
-            border-radius: 5px;
-            padding: 10px;
-            max-height: 200px;
-            overflow-y: auto;
+            border-radius: 8px;
+            padding: 1.2rem;
+            display: flex;
+            flex-direction: column;
+            transition: all 0.3s ease;
           }
-          .error-item {
-            margin-bottom: 5px;
-            border-bottom: 1px solid #eee;
-            padding-bottom: 5px;
+          
+          .stat-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
           }
-          .error-time {
-            color: #6c757d;
-            margin-right: 10px;
+          
+          .stat-title {
+            font-size: 0.9rem;
+            color: var(--gray);
+            margin-bottom: 0.8rem;
+            display: flex;
+            align-items: center;
           }
-          .error-type {
-            font-weight: bold;
-            margin-right: 10px;
+          
+          .stat-title i {
+            margin-right: 0.5rem;
+            color: var(--primary);
           }
-          .error-message {
-            color: #dc3545;
+          
+          .stat-value {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: var(--primary);
+            margin-top: auto;
           }
-          .no-errors {
-            color: #28a745;
+          
+          .stat-footer {
+            font-size: 0.85rem;
+            color: var(--gray);
+            margin-top: 0.8rem;
           }
+          
+          .nav-links {
+            display: flex;
+            gap: 1.5rem;
+          }
+          
+          .nav-link {
+            color: var(--dark);
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.2s;
+            display: flex;
+            align-items: center;
+          }
+          
+          .nav-link i {
+            margin-right: 0.5rem;
+          }
+          
+          .nav-link:hover {
+            color: var(--primary);
+          }
+          
+          .nav-link.active {
+            color: var(--primary);
+            font-weight: 600;
+          }
+          
           .db-error {
             background-color: #fff3cd;
-            border: 1px solid #ffeeba;
-            color: #856404;
-            padding: 10px;
+            border-left: 4px solid var(--warning);
+            padding: 1rem;
+            margin-bottom: 1.5rem;
             border-radius: 4px;
-            margin-bottom: 20px;
+          }
+          
+          .db-error-title {
+            font-weight: 600;
+            color: #856404;
+            margin-bottom: 0.5rem;
+          }
+          
+          .db-error-message {
+            font-size: 0.9rem;
+          }
+          
+          .error-log {
+            background-color: var(--light);
+            border-radius: 8px;
+            overflow: hidden;
+            max-height: 300px;
+            overflow-y: auto;
+          }
+          
+          .error-item {
+            display: grid;
+            grid-template-columns: auto 1fr 2fr;
+            gap: 1rem;
+            padding: 0.8rem 1rem;
+            border-bottom: 1px solid var(--border);
+            align-items: center;
+          }
+          
+          .error-time {
+            color: var(--gray);
+            font-size: 0.9rem;
+            white-space: nowrap;
+          }
+          
+          .error-type {
+            font-weight: 600;
+            color: var(--primary);
+          }
+          
+          .error-message {
+            color: var(--danger);
+          }
+          
+          .no-errors {
+            padding: 1.5rem;
+            text-align: center;
+            color: var(--success);
+            font-weight: 500;
+          }
+          
+          .no-errors i {
+            margin-right: 0.5rem;
+          }
+          
+          .action-buttons {
+            display: flex;
+            gap: 0.8rem;
+            margin-top: 1rem;
+          }
+          
+          .btn {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            font-weight: 500;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            border: none;
+          }
+          
+          .btn i {
+            margin-right: 0.5rem;
+          }
+          
+          .btn-primary {
+            background-color: var(--primary);
+            color: white;
+          }
+          
+          .btn-primary:hover {
+            background-color: #3651cf;
+          }
+          
+          .btn-info {
+            background-color: var(--info);
+            color: white;
+          }
+          
+          .btn-info:hover {
+            background-color: #2980b9;
+          }
+          
+          .btn-success {
+            background-color: var(--success);
+            color: white;
+          }
+          
+          .btn-success:hover {
+            background-color: #27ae60;
+          }
+          
+          .current-time {
+            font-size: 0.9rem;
+            color: var(--gray);
+            text-align: center;
+            margin-top: 2rem;
+          }
+          
+          .api-link {
+            display: inline-block;
+            font-size: 0.85rem;
+            color: var(--primary);
+            text-decoration: none;
+            margin-top: 0.5rem;
+          }
+          
+          .api-link:hover {
+            text-decoration: underline;
+          }
+          
+          @media (max-width: 992px) {
+            .grid-layout {
+              grid-template-columns: 1fr;
+            }
+          }
+          
+          @media (max-width: 768px) {
+            .stats-grid {
+              grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .header-container {
+              flex-direction: column;
+              text-align: center;
+            }
+            
+            .nav-links {
+              margin-top: 1rem;
+              flex-wrap: wrap;
+              justify-content: center;
+            }
+            
+            .error-item {
+              grid-template-columns: 1fr;
+            }
+          }
+          
+          @media (max-width: 576px) {
+            .stats-grid {
+              grid-template-columns: 1fr;
+            }
           }
         </style>
       </head>
       <body>
-        <div class="nav">
-          <a href="/status">Status</a>
-          <a href="/analytics">Analytics</a>
-          <a href="/test-webhook-dashboard">Test Webhook</a>
-          <a href="/resend-alerts">Resend Alerts</a>
+        <header>
+          <div class="header-container">
+            <div>
+              <h1>CGNSEAlert Dashboard</h1>
+              <span class="status-badge ${dbConnected ? 'healthy' : 'warning'}">
+                <i class="fas ${dbConnected ? 'fa-check-circle' : 'fa-exclamation-circle'}"></i> 
+                ${dbConnected ? 'System Healthy' : 'Database Disconnected'}
+              </span>
+            </div>
+            <div class="nav-links">
+              <a href="/status" class="nav-link active"><i class="fas fa-tachometer-alt"></i> Dashboard</a>
+              <a href="/analytics" class="nav-link"><i class="fas fa-chart-pie"></i> Analytics</a>
+              <a href="/test-webhook-dashboard" class="nav-link"><i class="fas fa-paper-plane"></i> Test Webhook</a>
+              <a href="/resend-alerts" class="nav-link"><i class="fas fa-redo"></i> Resend Alerts</a>
+              <a href="/health" class="nav-link"><i class="fas fa-heartbeat"></i> Health</a>
+            </div>
+          </div>
+        </header>
+        
+        <div class="container">
+          ${dbError ? `
+            <div class="db-error">
+              <div class="db-error-title"><i class="fas fa-exclamation-triangle"></i> Database Connection Error</div>
+              <div class="db-error-message">${dbError}</div>
+              <div class="db-error-message">Some features may be limited. Please check your MongoDB connection settings.</div>
+            </div>
+          ` : ''}
+          
+          <div class="grid-layout">
+            <div>
+              <div class="panel">
+                <div class="panel-header">
+                  <div class="panel-title">
+                    <i class="fas fa-chart-line"></i> System Overview
+                  </div>
+                </div>
+                
+                <div class="stats-grid">
+                  <div class="stat-card">
+                    <div class="stat-title"><i class="fas fa-clock"></i> Uptime</div>
+                    <div class="stat-value">${uptimeString}</div>
+                    <div class="stat-footer">Started: ${new Date(Date.now() - uptime * 1000).toLocaleString()}</div>
+                  </div>
+                  
+                  <div class="stat-card">
+                    <div class="stat-title"><i class="fas fa-bell"></i> Today's Alerts</div>
+                    <div class="stat-value">${todayAlertCount}</div>
+                    <div class="stat-footer">Last: ${lastAlertTime}</div>
+                  </div>
+                  
+                  <div class="stat-card">
+                    <div class="stat-title"><i class="fas fa-paper-plane"></i> Today's Webhooks</div>
+                    <div class="stat-value">${todayWebhooks}</div>
+                    <div class="stat-footer">Total: ${totalWebhooks}</div>
+                  </div>
+                  
+                  <div class="stat-card">
+                    <div class="stat-title"><i class="fas fa-database"></i> Total Alerts</div>
+                    <div class="stat-value">${totalAlerts}</div>
+                    <div class="stat-footer">All time</div>
+                  </div>
+                </div>
+                
+                <div class="action-buttons">
+                  <a href="/test-telegram" class="btn btn-primary"><i class="fas fa-paper-plane"></i> Test Telegram</a>
+                  <a href="/test-webhook-dashboard" class="btn btn-info"><i class="fas fa-code"></i> Test Webhook</a>
+                  <a href="/daily-summary" class="btn btn-success"><i class="fas fa-calendar-day"></i> Generate Summary</a>
+                </div>
+              </div>
+            </div>
+            
+            <div>
+              <div class="panel">
+                <div class="panel-header">
+                  <div class="panel-title">
+                    <i class="fas fa-exclamation-circle"></i> Error Log
+                  </div>
+                </div>
+                
+                <div class="error-log">
+                  ${errorLog}
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="current-time">
+            Dashboard refreshes automatically every minute. Last updated: ${new Date().toLocaleString()}
+          </div>
+          
+          <a href="/api/status" class="api-link">View JSON API response →</a>
         </div>
-        
-        <h1>System Status</h1>
-        
-        ${dbError ? `<div class="db-error">
-          <strong>Database Connection Error:</strong> ${dbError}
-          <p>Some features may be limited. Please check your MongoDB connection settings.</p>
-        </div>` : ''}
-        
-        <div class="status-container">
-          <h2>System Status</h2>
-          <div class="status-row">
-            <span class="status-label">Uptime</span>
-            <span class="status-value">${uptimeString}</span>
-          </div>
-          <div class="status-row">
-            <span class="status-label">System Status</span>
-            <span class="status-value ${dbConnected ? 'healthy' : 'warning'}">${systemStatus}</span>
-          </div>
-          <div class="status-row">
-            <span class="status-label">Last Restarted</span>
-            <span class="status-value">${new Date(Date.now() - uptime * 1000).toISOString()}</span>
-          </div>
-        </div>
-        
-        <div class="status-container">
-          <h2>Stock Alerts</h2>
-          <div class="status-row">
-            <span class="status-label">Alerts Received Today</span>
-            <span class="status-value">${todayAlertCount}</span>
-          </div>
-          <div class="status-row">
-            <span class="status-label">Total Alerts</span>
-            <span class="status-value">${totalAlerts}${!dbConnected ? ' (estimate)' : ''}</span>
-          </div>
-          <div class="status-row">
-            <span class="status-label">Webhooks Received Today</span>
-            <span class="status-value">${todayWebhooks}</span>
-          </div>
-          <div class="status-row">
-            <span class="status-label">Total Webhooks</span>
-            <span class="status-value">${totalWebhooks}</span>
-          </div>
-          <div class="status-row">
-            <span class="status-label">Last Alert</span>
-            <span class="status-value">${lastAlertTime}</span>
-          </div>
-        </div>
-        
-        <div class="status-container">
-          <h2>Error Log</h2>
-          <div class="error-log">
-            ${errorLog}
-          </div>
-        </div>
-        
-        <div class="status-container">
-          <h2>Quick Actions</h2>
-          <div style="display: flex; gap: 10px;">
-            <button onclick="window.location.href='/test-webhook-dashboard'">Test Webhook</button>
-            <button onclick="window.location.href='/test-telegram'">Test Telegram</button>
-            <button onclick="window.location.href='/resend-alerts'">Resend Alerts</button>
-          </div>
-        </div>
-        
-        <p><small>This page auto-refreshes every 30 seconds. Last updated: ${new Date().toLocaleTimeString()}</small></p>
       </body>
       </html>
     `);
@@ -981,6 +1649,14 @@ app.get('/analytics', async (req, res) => {
   // Get analytics summary
   const analytics = Analytics.getSummary(period);
   
+  // Format period name for display
+  const periodName = {
+    'day': 'Today',
+    'week': 'This Week',
+    'month': 'This Month',
+    'all': 'All Time'
+  }[period] || 'All Time';
+  
   // Return HTML page
   res.send(`
     <!DOCTYPE html>
@@ -988,412 +1664,499 @@ app.get('/analytics', async (req, res) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Stock Alerts Analytics</title>
+      <title>CGNSEAlert Analytics</title>
+      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
       <style>
+        :root {
+          --primary: #4361ee;
+          --success: #2ecc71;
+          --warning: #f39c12;
+          --danger: #e74c3c;
+          --info: #3498db;
+          --light: #f8f9fa;
+          --dark: #343a40;
+          --gray: #6c757d;
+          --border: #e9ecef;
+        }
+        
+        * {
+          box-sizing: border-box;
+          margin: 0;
+          padding: 0;
+        }
+        
         body {
           font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
           line-height: 1.6;
-          color: #333;
+          color: var(--dark);
+          background-color: #f5f7fb;
+          padding: 0;
+          margin: 0;
+        }
+        
+        .container {
           max-width: 1200px;
           margin: 0 auto;
-          padding: 20px;
+          padding: 2rem;
         }
-        h1, h2, h3 {
-          color: #0066cc;
+        
+        header {
+          background-color: white;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+          padding: 1.5rem 0;
+          margin-bottom: 2rem;
         }
-        .card {
-          background-color: #f9f9f9;
+        
+        .header-container {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          max-width: 1200px;
+          margin: 0 auto;
+          padding: 0 2rem;
+        }
+        
+        h1 {
+          font-size: 1.8rem;
+          color: var(--primary);
+          margin-bottom: 0.5rem;
+        }
+        
+        h2 {
+          font-size: 1.4rem;
+          margin-bottom: 1rem;
+          color: var(--dark);
+        }
+        
+        .panel {
+          background-color: white;
           border-radius: 8px;
-          padding: 20px;
-          margin-bottom: 20px;
-          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+          padding: 1.5rem;
+          margin-bottom: 1.5rem;
         }
-        .metrics {
-          display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-          gap: 15px;
-          margin: 15px 0;
+        
+        .panel-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 1.2rem;
+          padding-bottom: 0.8rem;
+          border-bottom: 1px solid rgba(0,0,0,0.05);
         }
-        .metric {
-          background-color: #fff;
-          padding: 15px;
-          border-radius: 6px;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-        }
-        .metric h3 {
-          margin-top: 0;
-          font-size: 14px;
-          color: #666;
-          text-transform: uppercase;
-        }
-        .metric p {
-          margin-bottom: 0;
-          font-size: 24px;
+        
+        .panel-title {
+          font-size: 1.2rem;
           font-weight: 600;
-          color: #0066cc;
+          color: var(--primary);
+          display: flex;
+          align-items: center;
         }
-        .metric p.positive {
-          color: #4caf50;
+        
+        .panel-title i {
+          margin-right: 0.5rem;
         }
-        .metric p.negative {
-          color: #f44336;
+        
+        .stats-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+          gap: 1.2rem;
+          margin-bottom: 1.5rem;
         }
+        
+        .stat-card {
+          background-color: #f8f9fa;
+          border-radius: 8px;
+          padding: 1.2rem;
+          transition: all 0.3s ease;
+        }
+        
+        .stat-card:hover {
+          transform: translateY(-3px);
+          box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        
+        .stat-title {
+          font-size: 0.85rem;
+          color: var(--gray);
+          margin-bottom: 0.5rem;
+          display: flex;
+          align-items: center;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+        
+        .stat-title i {
+          margin-right: 0.5rem;
+          color: var(--primary);
+        }
+        
+        .stat-value {
+          font-size: 1.8rem;
+          font-weight: 700;
+          color: var(--primary);
+        }
+        
+        .stat-value.positive {
+          color: var(--success);
+        }
+        
+        .stat-value.negative {
+          color: var(--danger);
+        }
+        
+        .table-responsive {
+          overflow-x: auto;
+          border-radius: 8px;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        
         table {
           width: 100%;
           border-collapse: collapse;
-          margin: 15px 0;
+          background-color: white;
         }
+        
         th, td {
           text-align: left;
-          padding: 12px 15px;
-          border-bottom: 1px solid #ddd;
+          padding: 1rem;
+          border-bottom: 1px solid var(--border);
         }
+        
         th {
-          background-color: #f2f2f2;
+          background-color: rgba(67, 97, 238, 0.05);
+          font-weight: 600;
+          color: var(--primary);
+          position: sticky;
+          top: 0;
+        }
+        
+        tr:last-child td {
+          border-bottom: none;
+        }
+        
+        tr:hover td {
+          background-color: rgba(67, 97, 238, 0.02);
+        }
+        
+        .performance-cell {
           font-weight: 600;
         }
-        tr:hover {
-          background-color: #f5f5f5;
+        
+        .positive-value {
+          color: var(--success);
         }
-        .period-selector {
-          margin-bottom: 20px;
+        
+        .negative-value {
+          color: var(--danger);
         }
-        .period-selector a {
-          display: inline-block;
-          padding: 8px 16px;
-          margin-right: 10px;
-          background-color: #f2f2f2;
-          color: #333;
-          border-radius: 4px;
+        
+        .neutral-value {
+          color: var(--gray);
+        }
+        
+        .period-tabs {
+          display: flex;
+          gap: 0.5rem;
+          margin-bottom: 2rem;
+          flex-wrap: wrap;
+        }
+        
+        .period-tab {
+          padding: 0.6rem 1.2rem;
+          border-radius: 6px;
+          background-color: white;
+          color: var(--dark);
+          font-weight: 500;
+          text-decoration: none;
+          transition: all 0.2s;
+          box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+          display: flex;
+          align-items: center;
+        }
+        
+        .period-tab i {
+          margin-right: 0.5rem;
+          font-size: 0.9rem;
+        }
+        
+        .period-tab:hover {
+          background-color: #f8f9fa;
+          transform: translateY(-2px);
+          box-shadow: 0 4px 8px rgba(0,0,0,0.08);
+        }
+        
+        .period-tab.active {
+          background-color: var(--primary);
+          color: white;
+        }
+        
+        .period-tab.active:hover {
+          background-color: #3651cf;
+        }
+        
+        .nav-links {
+          display: flex;
+          gap: 1.5rem;
+        }
+        
+        .nav-link {
+          color: var(--dark);
           text-decoration: none;
           font-weight: 500;
-          transition: background-color 0.3s;
+          transition: color 0.2s;
+          display: flex;
+          align-items: center;
         }
-        .period-selector a.active {
-          background-color: #0066cc;
-          color: white;
+        
+        .nav-link i {
+          margin-right: 0.5rem;
         }
-        .period-selector a:hover {
-          background-color: #e0e0e0;
+        
+        .nav-link:hover {
+          color: var(--primary);
         }
-        .period-selector a.active:hover {
-          background-color: #0055aa;
+        
+        .nav-link.active {
+          color: var(--primary);
+          font-weight: 600;
         }
-        .footer {
-          margin-top: 30px;
-          font-size: 14px;
-          color: #666;
+        
+        .current-time {
+          font-size: 0.9rem;
+          color: var(--gray);
           text-align: center;
+          margin-top: 2rem;
         }
-      </style>
-    </head>
-    <body>
-      <h1>Stock Alerts Analytics</h1>
-      
-      <div class="period-selector">
-        <a href="/analytics?period=day" class="${period === 'day' ? 'active' : ''}">Today</a>
-        <a href="/analytics?period=week" class="${period === 'week' ? 'active' : ''}">This Week</a>
-        <a href="/analytics?period=month" class="${period === 'month' ? 'active' : ''}">This Month</a>
-        <a href="/analytics?period=all" class="${period === 'all' ? 'active' : ''}">All Time</a>
-      </div>
-      
-      <div class="card">
-        <h2>Performance Summary</h2>
-        <div class="metrics">
-          <div class="metric">
-            <h3>Total Alerts</h3>
-            <p>${analytics.totalAlerts || 0}</p>
-          </div>
-          <div class="metric">
-            <h3>Success Rate</h3>
-            <p>${analytics.successRate ? analytics.successRate.toFixed(1) + '%' : 'N/A'}</p>
-          </div>
-          <div class="metric">
-            <h3>Avg. Gain</h3>
-            <p class="positive">${analytics.avgGain ? '+' + analytics.avgGain.toFixed(2) + '%' : 'N/A'}</p>
-          </div>
-          <div class="metric">
-            <h3>Avg. Loss</h3>
-            <p class="negative">${analytics.avgLoss ? analytics.avgLoss.toFixed(2) + '%' : 'N/A'}</p>
-          </div>
-        </div>
-      </div>
-      
-      ${analytics.topStocks && analytics.topStocks.length > 0 ? `
-        <div class="card">
-          <h2>Top Performing Stocks</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Performance</th>
-                <th>Success Rate</th>
-                <th>Alerts</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${analytics.topStocks.map(stock => `
-                <tr>
-                  <td>${stock.symbol}</td>
-                  <td>${stock.performance > 0 ? '+' : ''}${stock.performance.toFixed(2)}%</td>
-                  <td>${stock.successRate.toFixed(1)}%</td>
-                  <td>${stock.alerts}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-      ` : ''}
-      
-      ${analytics.topScans && analytics.topScans.length > 0 ? `
-        <div class="card">
-          <h2>Top Performing Scans</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Scan</th>
-                <th>Performance</th>
-                <th>Success Rate</th>
-                <th>Alerts</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${analytics.topScans.map(scan => `
-                <tr>
-                  <td>${scan.name}</td>
-                  <td>${scan.performance > 0 ? '+' : ''}${scan.performance.toFixed(2)}%</td>
-                  <td>${scan.successRate.toFixed(1)}%</td>
-                  <td>${scan.alerts}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-      ` : ''}
-      
-      ${analytics.bestPerformer ? `
-        <div class="card">
-          <h2>Best & Worst Performers</h2>
-          <div class="metrics">
-            <div class="metric">
-              <h3>Best Performer</h3>
-              <p class="positive">${analytics.bestPerformer.symbol}: ${analytics.bestPerformer.performance.toFixed(2)}%</p>
-            </div>
-            ${analytics.worstPerformer ? `
-              <div class="metric">
-                <h3>Worst Performer</h3>
-                <p class="negative">${analytics.worstPerformer.symbol}: ${analytics.worstPerformer.performance.toFixed(2)}%</p>
-              </div>
-            ` : ''}
-          </div>
-        </div>
-      ` : ''}
-      
-      <div class="footer">
-        <p>Last updated: ${analytics.lastUpdated ? new Date(analytics.lastUpdated).toLocaleString() : 'N/A'}</p>
-        <p><a href="/status">System Status</a> | <a href="/health">Health Check</a></p>
-      </div>
-    </body>
-    </html>
-  `);
-});
-
-// Test webhook dashboard
-app.get('/test-webhook-dashboard', (req, res) => {
-  // Check database connection
-  const dbConnected = Database.isConnected;
-  const dbConnectMessage = dbConnected ? 
-    '<div class="alert alert-success">MongoDB connected - Webhooks will be stored in the database</div>' :
-    '<div class="alert alert-warning">MongoDB not connected - Webhooks will still work but won\'t be stored in the database. See <a href="/MONGODB-CONNECTION-FIX.md">connection fix guide</a></div>';
-    
-  res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>Test Webhook Dashboard</title>
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <style>
-        body {
-          font-family: Arial, sans-serif;
-          max-width: 800px;
-          margin: 0 auto;
-          padding: 20px;
+        
+        .no-data {
+          text-align: center;
+          padding: 2rem;
+          color: var(--gray);
+          font-style: italic;
         }
-        .nav {
-          margin-bottom: 20px;
-        }
-        .nav a {
-          margin-right: 15px;
-          text-decoration: none;
-          color: #2196F3;
-        }
-        .form-group {
-          margin-bottom: 15px;
-        }
-        label {
+        
+        .no-data i {
           display: block;
-          margin-bottom: 5px;
-          font-weight: bold;
+          font-size: 2.5rem;
+          margin-bottom: 1rem;
+          color: #dee2e6;
         }
-        input, textarea, select {
-          width: 100%;
-          padding: 8px;
-          border: 1px solid #ddd;
-          border-radius: 4px;
-          box-sizing: border-box;
+        
+        @media (max-width: 768px) {
+          .stats-grid {
+            grid-template-columns: repeat(2, 1fr);
+          }
+          
+          .header-container {
+            flex-direction: column;
+            text-align: center;
+          }
+          
+          .nav-links {
+            margin-top: 1rem;
+            flex-wrap: wrap;
+            justify-content: center;
+          }
+          
+          .period-tabs {
+            justify-content: center;
+          }
         }
-        button {
-          background-color: #4CAF50;
-          color: white;
-          padding: 10px 15px;
-          border: none;
-          border-radius: 4px;
-          cursor: pointer;
-        }
-        button:hover {
-          background-color: #45a049;
-        }
-        .response {
-          margin-top: 20px;
-          padding: 15px;
-          border: 1px solid #ddd;
-          border-radius: 4px;
-          background-color: #f9f9f9;
-          white-space: pre-wrap;
-          max-height: 300px;
-          overflow-y: auto;
-        }
-        .templates {
-          margin-top: 20px;
-          padding: 15px;
-          border: 1px solid #ddd;
-          border-radius: 4px;
-          background-color: #f9f9f9;
-        }
-        .alert {
-          padding: 12px;
-          margin-bottom: 15px;
-          border-radius: 4px;
-        }
-        .alert-success {
-          background-color: #dff0d8;
-          color: #3c763d;
-          border: 1px solid #d6e9c6;
-        }
-        .alert-warning {
-          background-color: #fcf8e3;
-          color: #8a6d3b;
-          border: 1px solid #faebcc;
+        
+        @media (max-width: 576px) {
+          .stats-grid {
+            grid-template-columns: 1fr;
+          }
+          
+          th, td {
+            padding: 0.75rem;
+          }
+          
+          .period-tab {
+            flex: 1;
+            text-align: center;
+            padding: 0.6rem 0.5rem;
+            justify-content: center;
+          }
         }
       </style>
     </head>
     <body>
-      <div class="nav">
-        <a href="/status">Status</a>
-        <a href="/analytics">Analytics</a>
-        <a href="/test-webhook-dashboard">Test Webhook</a>
-        <a href="/resend-alerts">Resend Alerts</a>
-      </div>
+      <header>
+        <div class="header-container">
+          <div>
+            <h1>CGNSEAlert Analytics</h1>
+            <span class="period-label">${periodName} Performance</span>
+          </div>
+          <div class="nav-links">
+            <a href="/status" class="nav-link"><i class="fas fa-tachometer-alt"></i> Dashboard</a>
+            <a href="/analytics" class="nav-link active"><i class="fas fa-chart-pie"></i> Analytics</a>
+            <a href="/test-webhook-dashboard" class="nav-link"><i class="fas fa-paper-plane"></i> Test Webhook</a>
+            <a href="/resend-alerts" class="nav-link"><i class="fas fa-redo"></i> Resend Alerts</a>
+            <a href="/health" class="nav-link"><i class="fas fa-heartbeat"></i> Health</a>
+          </div>
+        </div>
+      </header>
       
-      <h1>Test Webhook Dashboard</h1>
-      
-      ${dbConnectMessage}
-      
-      <p>Use this form to test sending webhooks to your bot without needing external tools.</p>
-      
-      <form id="webhook-form">
-        <div class="form-group">
-          <label for="symbol">Stock Symbol:</label>
-          <input type="text" id="symbol" name="symbol" value="RELIANCE" required>
+      <div class="container">
+        <div class="period-tabs">
+          <a href="/analytics?period=day" class="period-tab ${period === 'day' ? 'active' : ''}">
+            <i class="fas fa-calendar-day"></i> Today
+          </a>
+          <a href="/analytics?period=week" class="period-tab ${period === 'week' ? 'active' : ''}">
+            <i class="fas fa-calendar-week"></i> This Week
+          </a>
+          <a href="/analytics?period=month" class="period-tab ${period === 'month' ? 'active' : ''}">
+            <i class="fas fa-calendar-alt"></i> This Month
+          </a>
+          <a href="/analytics?period=all" class="period-tab ${period === 'all' ? 'active' : ''}">
+            <i class="fas fa-infinity"></i> All Time
+          </a>
         </div>
         
-        <div class="form-group">
-          <label for="price">Trigger Price:</label>
-          <input type="number" id="price" name="price" value="2500" step="0.01" required>
-        </div>
-        
-        <div class="form-group">
-          <label for="scan_name">Scan Name:</label>
-          <input type="text" id="scan_name" name="scan_name" value="Test Scan" required>
-        </div>
-        
-        <div class="form-group">
-          <label for="format">Webhook Format:</label>
-          <select id="format" name="format">
-            <option value="single">Single Stock</option>
-            <option value="stocks_array">Stocks Array</option>
-          </select>
-        </div>
-        
-        <button type="submit">Send Webhook</button>
-      </form>
-      
-      <div class="response" id="response" style="display: none;"></div>
-      
-      <div class="templates">
-        <h3>Available Templates</h3>
-        <p><strong>Single Stock:</strong> Sends a webhook with a single stock</p>
-        <p><strong>Stocks Array:</strong> Sends a webhook with an array of stocks in the "stocks" field</p>
-      </div>
-      
-      <script>
-        document.getElementById('webhook-form').addEventListener('submit', async (event) => {
-          event.preventDefault();
+        <div class="panel">
+          <div class="panel-header">
+            <div class="panel-title">
+              <i class="fas fa-chart-line"></i> Performance Summary
+            </div>
+          </div>
           
-          // Get form values
-          const symbol = document.getElementById('symbol').value;
-          const price = document.getElementById('price').value;
-          const scanName = document.getElementById('scan_name').value;
-          const format = document.getElementById('format').value;
-          
-          // Prepare payload based on format
-          let payload;
-          
-          if (format === 'single') {
-            payload = {
-              symbol: symbol,
-              close: parseFloat(price),
-              scan_name: scanName,
-              timestamp: new Date().toISOString()
-            };
-          } else if (format === 'stocks_array') {
-            payload = {
-              scan_name: scanName,
-              stocks: [
-                {
-                  symbol: symbol,
-                  close: parseFloat(price),
-                  timestamp: new Date().toISOString()
-                }
-              ]
-            };
-          }
-          
-          // Show loading state
-          const responseDiv = document.getElementById('response');
-          responseDiv.style.display = 'block';
-          responseDiv.textContent = 'Sending webhook...';
-          
-          try {
-            // Send webhook
-            const response = await fetch('/webhook', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify(payload)
-            });
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-title"><i class="fas fa-bell"></i> Total Alerts</div>
+              <div class="stat-value">${analytics.totalAlerts || 0}</div>
+            </div>
             
-            // Parse response
-            const data = await response.json();
+            <div class="stat-card">
+              <div class="stat-title"><i class="fas fa-check-circle"></i> Success Rate</div>
+              <div class="stat-value ${analytics.successRate && analytics.successRate > 50 ? 'positive' : ''}">${analytics.successRate ? analytics.successRate.toFixed(1) + '%' : 'N/A'}</div>
+            </div>
             
-            // Display response
-            responseDiv.textContent = JSON.stringify(data, null, 2);
-          } catch (error) {
-            responseDiv.textContent = 'Error: ' + error.message;
-          }
-        });
-      </script>
+            <div class="stat-card">
+              <div class="stat-title"><i class="fas fa-arrow-up"></i> Avg. Gain</div>
+              <div class="stat-value positive">${analytics.avgGain ? '+' + analytics.avgGain.toFixed(2) + '%' : 'N/A'}</div>
+            </div>
+            
+            <div class="stat-card">
+              <div class="stat-title"><i class="fas fa-arrow-down"></i> Avg. Loss</div>
+              <div class="stat-value negative">${analytics.avgLoss ? analytics.avgLoss.toFixed(2) + '%' : 'N/A'}</div>
+            </div>
+          </div>
+          
+          ${analytics.bestPerformer ? `
+            <div class="stats-grid">
+              <div class="stat-card">
+                <div class="stat-title"><i class="fas fa-trophy"></i> Best Performer</div>
+                <div class="stat-value positive">${analytics.bestPerformer.symbol}</div>
+                <div style="font-weight: 600; color: var(--success); margin-top: 0.5rem;">+${analytics.bestPerformer.performance.toFixed(2)}%</div>
+              </div>
+              
+              ${analytics.worstPerformer ? `
+                <div class="stat-card">
+                  <div class="stat-title"><i class="fas fa-exclamation-triangle"></i> Worst Performer</div>
+                  <div class="stat-value negative">${analytics.worstPerformer.symbol}</div>
+                  <div style="font-weight: 600; color: var(--danger); margin-top: 0.5rem;">${analytics.worstPerformer.performance.toFixed(2)}%</div>
+                </div>
+              ` : ''}
+            </div>
+          ` : ''}
+        </div>
+        
+        ${analytics.topStocks && analytics.topStocks.length > 0 ? `
+          <div class="panel">
+            <div class="panel-header">
+              <div class="panel-title">
+                <i class="fas fa-star"></i> Top Performing Stocks
+              </div>
+            </div>
+            
+            <div class="table-responsive">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Performance</th>
+                    <th>Success Rate</th>
+                    <th>Alerts</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${analytics.topStocks.map(stock => `
+                    <tr>
+                      <td><strong>${stock.symbol}</strong></td>
+                      <td class="performance-cell ${stock.performance > 0 ? 'positive-value' : 'negative-value'}">${stock.performance > 0 ? '+' : ''}${stock.performance.toFixed(2)}%</td>
+                      <td class="${stock.successRate > 70 ? 'positive-value' : stock.successRate < 30 ? 'negative-value' : 'neutral-value'}">${stock.successRate.toFixed(1)}%</td>
+                      <td>${stock.alerts}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ` : `
+          <div class="panel">
+            <div class="panel-header">
+              <div class="panel-title">
+                <i class="fas fa-star"></i> Top Performing Stocks
+              </div>
+            </div>
+            <div class="no-data">
+              <i class="fas fa-chart-bar"></i>
+              No stock performance data available for this period
+            </div>
+          </div>
+        `}
+        
+        ${analytics.topScans && analytics.topScans.length > 0 ? `
+          <div class="panel">
+            <div class="panel-header">
+              <div class="panel-title">
+                <i class="fas fa-search"></i> Top Performing Scans
+              </div>
+            </div>
+            
+            <div class="table-responsive">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Scan</th>
+                    <th>Performance</th>
+                    <th>Success Rate</th>
+                    <th>Alerts</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${analytics.topScans.map(scan => `
+                    <tr>
+                      <td><strong>${scan.name}</strong></td>
+                      <td class="performance-cell ${scan.performance > 0 ? 'positive-value' : 'negative-value'}">${scan.performance > 0 ? '+' : ''}${scan.performance.toFixed(2)}%</td>
+                      <td class="${scan.successRate > 70 ? 'positive-value' : scan.successRate < 30 ? 'negative-value' : 'neutral-value'}">${scan.successRate.toFixed(1)}%</td>
+                      <td>${scan.alerts}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ` : `
+          <div class="panel">
+            <div class="panel-header">
+              <div class="panel-title">
+                <i class="fas fa-search"></i> Top Performing Scans
+              </div>
+            </div>
+            <div class="no-data">
+              <i class="fas fa-chart-line"></i>
+              No scan performance data available for this period
+            </div>
+          </div>
+        `}
+        
+        <div class="current-time">
+          Last updated: ${analytics.lastUpdated ? new Date(analytics.lastUpdated).toLocaleString() : new Date().toLocaleString()}
+        </div>
+      </div>
     </body>
     </html>
   `);
