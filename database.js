@@ -313,6 +313,101 @@ class Database {
       console.error('Error backing up data to file:', error);
     }
   }
+
+  /**
+   * Get alert by ID
+   * @param {string} alertId - The ID of the alert to retrieve
+   * @returns {Promise<Object>} - The alert object
+   */
+  async getAlertById(alertId) {
+    try {
+      if (!this.client) {
+        await this.connect();
+      }
+      
+      const db = this.client.db(this.dbName);
+      const collection = db.collection('alerts');
+      
+      // Convert string ID to ObjectId if needed
+      let objectId;
+      try {
+        objectId = new this.mongodb.ObjectId(alertId);
+      } catch (error) {
+        console.error('Invalid ObjectId format:', error);
+        return null;
+      }
+      
+      const alert = await collection.findOne({ _id: objectId });
+      return alert;
+    } catch (error) {
+      console.error('Error getting alert by ID:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get alerts by scan name after a specific date
+   * @param {string} scanName - The scan name to filter by
+   * @param {Date} afterDate - Date to filter alerts after
+   * @returns {Promise<Array>} - Array of alert objects
+   */
+  async getAlertsByScan(scanName, afterDate) {
+    try {
+      if (!this.client) {
+        await this.connect();
+      }
+      
+      const db = this.client.db(this.dbName);
+      const collection = db.collection('alerts');
+      
+      const query = { 
+        scan_name: scanName 
+      };
+      
+      // Add date filter if provided
+      if (afterDate) {
+        query.createdAt = { $gte: afterDate };
+      }
+      
+      const alerts = await collection.find(query).toArray();
+      return alerts;
+    } catch (error) {
+      console.error('Error getting alerts by scan:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get alerts created after a specific date
+   * @param {Date} afterDate - Date to filter alerts after
+   * @returns {Promise<Array>} - Array of alert objects
+   */
+  async getAlertsAfterDate(afterDate) {
+    try {
+      if (!this.client) {
+        await this.connect();
+      }
+      
+      const db = this.client.db(this.dbName);
+      const collection = db.collection('alerts');
+      
+      const query = {};
+      
+      // Add date filter if provided
+      if (afterDate) {
+        query.$or = [
+          { createdAt: { $gte: afterDate } },
+          { timestamp: { $gte: afterDate } }
+        ];
+      }
+      
+      const alerts = await collection.find(query).sort({ timestamp: -1 }).toArray();
+      return alerts;
+    } catch (error) {
+      console.error('Error getting alerts after date:', error);
+      return [];
+    }
+  }
 }
 
 // Export as singleton

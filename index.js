@@ -696,216 +696,170 @@ app.get('/api/analytics', (req, res) => {
 });
 
 // Status page endpoint (HTML UI)
-app.get('/status', (req, res) => {
-  // Record health check
-  StatusMonitor.recordHealthCheck();
-  
-  // Get status data
-  const statusData = StatusMonitor.getStatus();
-  
-  // Return HTML page
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Stock Alerts System Status</title>
-      <style>
-        body {
-          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-          line-height: 1.6;
-          color: #333;
-          max-width: 1200px;
-          margin: 0 auto;
-          padding: 20px;
-        }
-        h1, h2, h3 {
-          color: #0066cc;
-        }
-        .status-card {
-          background-color: #f9f9f9;
-          border-radius: 8px;
-          padding: 20px;
-          margin-bottom: 20px;
-          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .metrics {
-          display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-          gap: 15px;
-          margin: 15px 0;
-        }
-        .metric {
-          background-color: #fff;
-          padding: 15px;
-          border-radius: 6px;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-        }
-        .metric h3 {
-          margin-top: 0;
-          font-size: 14px;
-          color: #666;
-          text-transform: uppercase;
-        }
-        .metric p {
-          margin-bottom: 0;
-          font-size: 24px;
-          font-weight: 600;
-          color: #0066cc;
-        }
-        .status-indicator {
-          display: inline-block;
-          width: 12px;
-          height: 12px;
-          border-radius: 50%;
-          margin-right: 8px;
-        }
-        .operational {
-          background-color: #4caf50;
-        }
-        .degraded {
-          background-color: #ff9800;
-        }
-        table {
-          width: 100%;
-          border-collapse: collapse;
-          margin: 15px 0;
-        }
-        th, td {
-          text-align: left;
-          padding: 12px 15px;
-          border-bottom: 1px solid #ddd;
-        }
-        th {
-          background-color: #f2f2f2;
-          font-weight: 600;
-        }
-        tr:hover {
-          background-color: #f5f5f5;
-        }
-        .footer {
-          margin-top: 30px;
-          font-size: 14px;
-          color: #666;
-          text-align: center;
-        }
-        .refresh-button {
-          display: inline-block;
-          padding: 8px 16px;
-          background-color: #0066cc;
-          color: white;
-          border-radius: 4px;
-          text-decoration: none;
-          font-weight: 500;
-        }
-      </style>
-    </head>
-    <body>
-      <h1>Stock Alerts System Status</h1>
-      
-      <div class="status-card">
-        <h2>
-          <span class="status-indicator ${statusData.status === 'operational' ? 'operational' : 'degraded'}"></span>
-          System Status: ${statusData.status === 'operational' ? 'Operational' : 'Degraded'}
-        </h2>
-        <p>Uptime: ${statusData.uptime}</p>
-        <p>Last updated: ${new Date(statusData.currentTime).toLocaleString()}</p>
-        <a href="/status" class="refresh-button">Refresh Status</a>
-      </div>
-      
-      <div class="status-card">
-        <h2>System Metrics</h2>
-        <div class="metrics">
-          <div class="metric">
-            <h3>Alerts Sent</h3>
-            <p>${statusData.metrics.alertsSent}</p>
+app.get('/status', async (req, res) => {
+  try {
+    // Get status data from StatusMonitor
+    const status = StatusMonitor.getStatus();
+    
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Stock Alerts Status</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+          }
+          h1, h2 {
+            color: #333;
+          }
+          .card {
+            background-color: #f9f9f9;
+            border-radius: 4px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+          }
+          .stat {
+            display: flex;
+            justify-content: space-between;
+            border-bottom: 1px solid #eee;
+            padding: 10px 0;
+          }
+          .stat-value {
+            font-weight: bold;
+          }
+          .error-list {
+            margin-top: 20px;
+            color: #d32f2f;
+          }
+          .error-item {
+            background-color: #ffebee;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-left: 4px solid #d32f2f;
+          }
+          .good {
+            color: #388e3c;
+          }
+          .warn {
+            color: #f57c00;
+          }
+          .bad {
+            color: #d32f2f;
+          }
+          .nav {
+            margin-bottom: 20px;
+          }
+          .nav a {
+            margin-right: 15px;
+            text-decoration: none;
+            color: #2196F3;
+          }
+          .action-buttons {
+            margin-top: 20px;
+          }
+          .action-buttons a {
+            display: inline-block;
+            padding: 10px 15px;
+            background-color: #2196F3;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            margin-right: 10px;
+            margin-bottom: 10px;
+          }
+          .action-buttons a:hover {
+            background-color: #0b7dda;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="nav">
+          <a href="/status">Status</a>
+          <a href="/analytics">Analytics</a>
+          <a href="/test-webhook-dashboard">Test Webhook</a>
+          <a href="/resend-alerts">Resend Alerts</a>
+        </div>
+        
+        <h1>Stock Alerts Status Dashboard</h1>
+        
+        <div class="action-buttons">
+          <a href="/test-webhook-dashboard">Send Test Webhook</a>
+          <a href="/resend-alerts">Resend Today's Alerts</a>
+          <a href="/test-telegram">Test Telegram</a>
+        </div>
+        
+        <div class="card">
+          <h2>System Status</h2>
+          <div class="stat">
+            <div>Uptime</div>
+            <div class="stat-value">${status.uptime}</div>
           </div>
-          <div class="metric">
-            <h3>Webhooks Received</h3>
-            <p>${statusData.metrics.webhooksReceived}</p>
+          <div class="stat">
+            <div>System Status</div>
+            <div class="stat-value ${status.health === 'Healthy' ? 'good' : status.health === 'Degraded' ? 'warn' : 'bad'}">${status.health}</div>
           </div>
-          <div class="metric">
-            <h3>Telegram Errors</h3>
-            <p>${statusData.metrics.telegramErrors}</p>
-          </div>
-          <div class="metric">
-            <h3>Data Fetch Errors</h3>
-            <p>${statusData.metrics.dataFetchErrors}</p>
-          </div>
-          <div class="metric">
-            <h3>Memory Usage</h3>
-            <p>${statusData.system.memoryUsage.heapUsed}</p>
-          </div>
-          <div class="metric">
-            <h3>CPU Load (1m)</h3>
-            <p>${statusData.system.cpuLoad['1m']}</p>
+          <div class="stat">
+            <div>Last Restarted</div>
+            <div class="stat-value">${status.startTime}</div>
           </div>
         </div>
-      </div>
-      
-      <div class="status-card">
-        <h2>Recent Alerts</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Symbols</th>
-              <th>Scan</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${statusData.recentAlerts.map(alert => `
-              <tr>
-                <td>${new Date(alert.timestamp).toLocaleString()}</td>
-                <td>${Array.isArray(alert.symbols) ? alert.symbols.join(', ') : alert.symbols}</td>
-                <td>${alert.scanName}</td>
-              </tr>
+        
+        <div class="card">
+          <h2>Stock Alerts</h2>
+          <div class="stat">
+            <div>Alerts Received Today</div>
+            <div class="stat-value">${status.alertsToday}</div>
+          </div>
+          <div class="stat">
+            <div>Total Alerts</div>
+            <div class="stat-value">${status.totalAlerts}</div>
+          </div>
+          <div class="stat">
+            <div>Webhooks Received Today</div>
+            <div class="stat-value">${status.webhooksToday}</div>
+          </div>
+          <div class="stat">
+            <div>Total Webhooks</div>
+            <div class="stat-value">${status.totalWebhooks}</div>
+          </div>
+          <div class="stat">
+            <div>Last Alert</div>
+            <div class="stat-value">${status.lastAlert}</div>
+          </div>
+        </div>
+        
+        <div class="card">
+          <h2>Error Log</h2>
+          ${status.recentErrors.length === 0 ? '<p>No recent errors.</p>' : ''}
+          <div class="error-list">
+            ${status.recentErrors.map(error => `
+              <div class="error-item">
+                <strong>${error.time}</strong>: ${error.message}
+                ${error.context ? `<br><small>${error.context}</small>` : ''}
+              </div>
             `).join('')}
-          </tbody>
-        </table>
-      </div>
-      
-      ${statusData.recentErrors.length > 0 ? `
-        <div class="status-card">
-          <h2>Recent Errors</h2>
-          ${statusData.recentErrors.map(error => `
-            <div class="error">
-              <strong>${new Date(error.timestamp).toLocaleString()}</strong>
-              <p>${error.context}: ${error.message}</p>
-            </div>
-          `).join('')}
+          </div>
         </div>
-      ` : ''}
-      
-      <div class="status-card">
-        <h2>System Information</h2>
-        <table>
-          <tr>
-            <td>Platform</td>
-            <td>${statusData.system.platform}</td>
-          </tr>
-          <tr>
-            <td>Node.js Version</td>
-            <td>${statusData.system.nodeVersion}</td>
-          </tr>
-          <tr>
-            <td>Memory</td>
-            <td>${statusData.system.freeMemory} free of ${statusData.system.totalMemory}</td>
-          </tr>
-          <tr>
-            <td>Start Time</td>
-            <td>${new Date(statusData.startTime).toLocaleString()}</td>
-          </tr>
-        </table>
-      </div>
-      
-      <div class="footer">
-        <p>Stock Alerts System - <a href="/analytics">View Analytics</a> | <a href="/health">Health Check</a></p>
-      </div>
-    </body>
-    </html>
-  `);
+        
+        <script>
+          // Auto refresh the page every 30 seconds
+          setTimeout(() => {
+            window.location.reload();
+          }, 30000);
+        </script>
+      </body>
+      </html>
+    `);
+  } catch (error) {
+    console.error('Error generating status page:', error);
+    res.status(500).send('Error generating status page');
+  }
 });
 
 // Analytics dashboard endpoint (HTML UI)
@@ -1131,6 +1085,482 @@ app.get('/analytics', async (req, res) => {
     </body>
     </html>
   `);
+});
+
+// Test webhook endpoint for web dashboard
+app.get('/test-webhook-dashboard', (req, res) => {
+  try {
+    // Render a simple HTML form to test webhooks
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Webhook Test Dashboard</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+          }
+          h1 {
+            color: #333;
+          }
+          .card {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 20px;
+            margin-bottom: 20px;
+            background-color: #f9f9f9;
+          }
+          label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+          }
+          input, select, textarea {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 16px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+          }
+          button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+          }
+          button:hover {
+            background-color: #45a049;
+          }
+          .result {
+            margin-top: 20px;
+            padding: 10px;
+            border-left: 4px solid #2196F3;
+            background-color: #e3f2fd;
+          }
+          .nav {
+            margin-bottom: 20px;
+          }
+          .nav a {
+            margin-right: 15px;
+            text-decoration: none;
+            color: #2196F3;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="nav">
+          <a href="/status">Status</a>
+          <a href="/analytics">Analytics</a>
+          <a href="/test-webhook-dashboard">Test Webhook</a>
+          <a href="/resend-alerts">Resend Alerts</a>
+        </div>
+        
+        <h1>Webhook Test Dashboard</h1>
+        
+        <div class="card">
+          <h2>Send Test Webhook</h2>
+          <form id="webhookForm">
+            <label for="stocks">Stock Symbol:</label>
+            <input type="text" id="stocks" name="stocks" value="RELIANCE" required>
+            
+            <label for="trigger_prices">Trigger Price:</label>
+            <input type="text" id="trigger_prices" name="trigger_prices" value="2500.00">
+            
+            <label for="scan_name">Scan Name:</label>
+            <input type="text" id="scan_name" name="scan_name" value="Test Webhook">
+            
+            <button type="submit">Send Webhook</button>
+          </form>
+          
+          <div id="result" class="result" style="display: none;"></div>
+        </div>
+        
+        <script>
+          document.getElementById('webhookForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const resultDiv = document.getElementById('result');
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = 'Sending webhook...';
+            
+            const payload = {
+              stocks: document.getElementById('stocks').value,
+              trigger_prices: document.getElementById('trigger_prices').value,
+              triggered_at: new Date().toLocaleTimeString(),
+              scan_name: document.getElementById('scan_name').value,
+              alert_name: document.getElementById('scan_name').value
+            };
+            
+            try {
+              const response = await fetch('/webhook', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+              });
+              
+              const data = await response.json();
+              
+              if (response.ok) {
+                resultDiv.innerHTML = '<strong>Success!</strong><br>Webhook sent and processed successfully.<br>Check your Telegram for the alert.<br><pre>' + JSON.stringify(data, null, 2) + '</pre>';
+              } else {
+                resultDiv.innerHTML = '<strong>Error!</strong><br>Webhook returned an error:<br><pre>' + JSON.stringify(data, null, 2) + '</pre>';
+              }
+            } catch (error) {
+              resultDiv.innerHTML = '<strong>Error!</strong><br>Failed to send webhook: ' + error.message;
+            }
+          });
+        </script>
+      </body>
+      </html>
+    `);
+  } catch (error) {
+    console.error('Error rendering test webhook page:', error);
+    res.status(500).send('Internal Server Error');
+  }
+});
+
+// Endpoint to view and resend alerts from today
+app.get('/resend-alerts', async (req, res) => {
+  try {
+    // Get today's date (start of day)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // Get alerts from database
+    const todayAlerts = await Database.getAlertsAfterDate(today);
+    
+    // Prepare HTML content
+    let alertsHtml = '';
+    
+    if (!todayAlerts || todayAlerts.length === 0) {
+      alertsHtml = '<p>No alerts found for today.</p>';
+    } else {
+      // Group alerts by scan name
+      const alertsByScan = {};
+      
+      todayAlerts.forEach(alert => {
+        const scanName = alert.scan_name || 'Unknown';
+        if (!alertsByScan[scanName]) {
+          alertsByScan[scanName] = [];
+        }
+        alertsByScan[scanName].push(alert);
+      });
+      
+      // Generate HTML for each group
+      for (const [scanName, alerts] of Object.entries(alertsByScan)) {
+        alertsHtml += `
+          <div class="alert-group">
+            <h3>${scanName} (${alerts.length} alerts)</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Price</th>
+                  <th>Time</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+        `;
+        
+        for (const alert of alerts) {
+          alertsHtml += `
+            <tr data-id="${alert._id}">
+              <td>${alert.symbol}</td>
+              <td>₹${alert.close ? alert.close.toFixed(2) : alert.price ? alert.price.toFixed(2) : 'N/A'}</td>
+              <td>${new Date(alert.timestamp || alert.createdAt).toLocaleTimeString()}</td>
+              <td>
+                <button class="resend-btn" data-id="${alert._id}">Resend</button>
+              </td>
+            </tr>
+          `;
+        }
+        
+        alertsHtml += `
+              </tbody>
+            </table>
+            <button class="resend-group-btn" data-scan="${scanName}">Resend All ${alerts.length} Alerts</button>
+          </div>
+        `;
+      }
+    }
+    
+    // Render HTML page
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Today's Alerts</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+          }
+          h1, h2, h3 {
+            color: #333;
+          }
+          .nav {
+            margin-bottom: 20px;
+          }
+          .nav a {
+            margin-right: 15px;
+            text-decoration: none;
+            color: #2196F3;
+          }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+          }
+          th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+          }
+          th {
+            background-color: #f2f2f2;
+          }
+          tr:nth-child(even) {
+            background-color: #f9f9f9;
+          }
+          .alert-group {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 15px;
+            margin-bottom: 20px;
+            background-color: #f9f9f9;
+          }
+          button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+          }
+          button:hover {
+            background-color: #45a049;
+          }
+          .resend-group-btn {
+            margin-bottom: 10px;
+            background-color: #2196F3;
+          }
+          .resend-group-btn:hover {
+            background-color: #0b7dda;
+          }
+          .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+          }
+          .success {
+            background-color: #dff0d8;
+            color: #3c763d;
+          }
+          .error {
+            background-color: #f2dede;
+            color: #a94442;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="nav">
+          <a href="/status">Status</a>
+          <a href="/analytics">Analytics</a>
+          <a href="/test-webhook-dashboard">Test Webhook</a>
+          <a href="/resend-alerts">Resend Alerts</a>
+        </div>
+        
+        <h1>Today's Alerts</h1>
+        <p>Found ${todayAlerts ? todayAlerts.length : 0} alerts from today. You can resend alerts that might have failed to deliver to Telegram.</p>
+        
+        <div id="status" class="status" style="display: none;"></div>
+        
+        ${alertsHtml}
+        
+        <script>
+          // Function to show status messages
+          function showStatus(message, isSuccess) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = isSuccess ? 'status success' : 'status error';
+            statusDiv.textContent = message;
+            statusDiv.style.display = 'block';
+            
+            // Scroll to top to see message
+            window.scrollTo(0, 0);
+            
+            // Hide message after 5 seconds
+            setTimeout(() => {
+              statusDiv.style.display = 'none';
+            }, 5000);
+          }
+          
+          // Add event listeners for individual resend buttons
+          document.querySelectorAll('.resend-btn').forEach(button => {
+            button.addEventListener('click', async () => {
+              const alertId = button.getAttribute('data-id');
+              button.disabled = true;
+              button.textContent = 'Sending...';
+              
+              try {
+                const response = await fetch('/api/resend-alert', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({ alertId })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                  showStatus('Alert resent successfully!', true);
+                  button.textContent = 'Sent ✓';
+                } else {
+                  showStatus('Failed to resend alert: ' + data.error, false);
+                  button.textContent = 'Failed';
+                }
+              } catch (error) {
+                showStatus('Error: ' + error.message, false);
+                button.textContent = 'Failed';
+              }
+            });
+          });
+          
+          // Add event listeners for group resend buttons
+          document.querySelectorAll('.resend-group-btn').forEach(button => {
+            button.addEventListener('click', async () => {
+              const scanName = button.getAttribute('data-scan');
+              button.disabled = true;
+              button.textContent = 'Sending...';
+              
+              try {
+                const response = await fetch('/api/resend-alerts-by-scan', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({ scanName })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                  showStatus(\`\${data.count} alerts from "\${scanName}" resent successfully!\`, true);
+                  button.textContent = 'All Sent ✓';
+                } else {
+                  showStatus('Failed to resend alerts: ' + data.error, false);
+                  button.textContent = 'Failed';
+                }
+              } catch (error) {
+                showStatus('Error: ' + error.message, false);
+                button.textContent = 'Failed';
+              }
+            });
+          });
+        </script>
+      </body>
+      </html>
+    `);
+  } catch (error) {
+    console.error('Error rendering resend alerts page:', error);
+    res.status(500).send('Internal Server Error');
+  }
+});
+
+// API endpoint to resend a single alert
+app.post('/api/resend-alert', async (req, res) => {
+  try {
+    const { alertId } = req.body;
+    
+    if (!alertId) {
+      return res.status(400).json({ error: 'Alert ID is required' });
+    }
+    
+    // Get alert from database
+    const alert = await Database.getAlertById(alertId);
+    
+    if (!alert) {
+      return res.status(404).json({ error: 'Alert not found' });
+    }
+    
+    // Format and send the alert
+    let message;
+    
+    // Format the message using the existing formatAlertMessage function
+    message = formatAlertMessage(alert, alert.scanType || alert.scan_name);
+    
+    // Send to Telegram
+    const messageSent = await sendTelegramMessage(message);
+    
+    if (messageSent) {
+      res.status(200).json({ success: true, message: 'Alert sent to Telegram' });
+    } else {
+      res.status(500).json({ error: 'Failed to send to Telegram' });
+    }
+  } catch (error) {
+    console.error('Error resending alert:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// API endpoint to resend alerts by scan name
+app.post('/api/resend-alerts-by-scan', async (req, res) => {
+  try {
+    const { scanName } = req.body;
+    
+    if (!scanName) {
+      return res.status(400).json({ error: 'Scan name is required' });
+    }
+    
+    // Get today's date (start of day)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // Get alerts for the scan
+    const alerts = await Database.getAlertsByScan(scanName, today);
+    
+    if (!alerts || alerts.length === 0) {
+      return res.status(404).json({ error: 'No alerts found for this scan' });
+    }
+    
+    // If there's only one alert, send it individually
+    if (alerts.length === 1) {
+      const message = formatAlertMessage(alerts[0], alerts[0].scanType || alerts[0].scan_name);
+      const messageSent = await sendTelegramMessage(message);
+      
+      if (messageSent) {
+        return res.status(200).json({ success: true, count: 1 });
+      } else {
+        return res.status(500).json({ error: 'Failed to send to Telegram' });
+      }
+    }
+    
+    // For multiple alerts, format as a group
+    const message = formatMultipleStocksMessage(alerts, scanName);
+    const messageSent = await sendTelegramMessage(message);
+    
+    if (messageSent) {
+      res.status(200).json({ success: true, count: alerts.length });
+    } else {
+      res.status(500).json({ error: 'Failed to send to Telegram' });
+    }
+  } catch (error) {
+    console.error('Error resending alerts by scan:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // Graceful shutdown handler
