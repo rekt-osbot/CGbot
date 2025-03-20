@@ -63,6 +63,8 @@ We've enhanced the status dashboard with direct links to the new features:
    - Added methods to retrieve alerts by ID (`getAlertById`)
    - Added methods to retrieve alerts by scan name (`getAlertsByScan`)
    - Added method to retrieve alerts after a date (`getAlertsAfterDate`)
+   - Fixed database connection issues with proper Mongoose model usage
+   - Added graceful error handling for database connection failures
 
 2. **API Endpoints**:
    - `/api/resend-alert` - Resends a single alert by ID
@@ -71,6 +73,28 @@ We've enhanced the status dashboard with direct links to the new features:
 3. **"stocks" field support**:
    - The webhook handler now correctly processes webhooks with the "stocks" field
    - This ensures compatibility with your analytics platform's webhook format
+
+4. **Error Handling**:
+   - Improved error handling for MongoDB connection issues
+   - User-friendly error messages when the database is unavailable
+   - The app continues to work for webhook testing even when MongoDB is down
+
+## MongoDB Connection Issues
+
+If you encounter MongoDB connection errors, please check:
+
+1. **IP Whitelist**: Ensure your current IP address is added to the MongoDB Atlas whitelist
+   - Go to MongoDB Atlas dashboard → Network Access → Add IP Address
+   - You can add your current IP or use `0.0.0.0/0` to allow all IPs
+
+2. **Connection String**: Verify the `MONGODB_URI` environment variable is correctly set
+   - Should look like: `mongodb+srv://username:password@cluster0.ygywb.mongodb.net/database?retryWrites=true&w=majority`
+
+3. **Credentials**: Ensure the username and password in the connection string are correct
+
+4. **Network**: Check if your network allows outbound connections to MongoDB Atlas (port 27017)
+
+If you continue to have issues, the webhook testing functionality will still work, but alert storage and retrieval will be limited.
 
 ## Deployment
 

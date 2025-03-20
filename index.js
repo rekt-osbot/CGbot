@@ -1236,19 +1236,37 @@ app.get('/resend-alerts', async (req, res) => {
     today.setHours(0, 0, 0, 0);
     
     // Get alerts from database
-    const todayAlerts = await Database.getAlertsAfterDate(today);
+    let todayAlerts = [];
+    let dbError = null;
+    
+    try {
+      todayAlerts = await Database.getAlertsAfterDate(today);
+    } catch (error) {
+      console.error('Error retrieving alerts from database:', error);
+      dbError = error.message || 'Database connection error';
+      StatusMonitor.recordError('database', error);
+    }
     
     // Prepare HTML content
     let alertsHtml = '';
     
-    if (!todayAlerts || todayAlerts.length === 0) {
+    if (dbError) {
+      alertsHtml = `
+        <div class="error-message">
+          <h3>Database Error</h3>
+          <p>Could not connect to MongoDB to retrieve alerts. Error: ${dbError}</p>
+          <p>Please check your MongoDB connection settings and make sure your IP is whitelisted in MongoDB Atlas.</p>
+          <p>The webhook testing feature will still work even without database connectivity.</p>
+        </div>
+      `;
+    } else if (!todayAlerts || todayAlerts.length === 0) {
       alertsHtml = '<p>No alerts found for today.</p>';
     } else {
       // Group alerts by scan name
       const alertsByScan = {};
       
       todayAlerts.forEach(alert => {
-        const scanName = alert.scan_name || 'Unknown';
+        const scanName = alert.scanName || alert.scan_name || 'Unknown';
         if (!alertsByScan[scanName]) {
           alertsByScan[scanName] = [];
         }
@@ -1276,7 +1294,7 @@ app.get('/resend-alerts', async (req, res) => {
           alertsHtml += `
             <tr data-id="${alert._id}">
               <td>${alert.symbol}</td>
-              <td>₹${alert.close ? alert.close.toFixed(2) : alert.price ? alert.price.toFixed(2) : 'N/A'}</td>
+              <td>₹${alert.currentPrice ? alert.currentPrice.toFixed(2) : alert.close ? alert.close.toFixed(2) : alert.price ? alert.price.toFixed(2) : 'N/A'}</td>
               <td>${new Date(alert.timestamp || alert.createdAt).toLocaleTimeString()}</td>
               <td>
                 <button class="resend-btn" data-id="${alert._id}">Resend</button>
@@ -1372,6 +1390,12 @@ app.get('/resend-alerts', async (req, res) => {
           .error {
             background-color: #f2dede;
             color: #a94442;
+          }
+          .error-message {
+            padding: 15px;
+            margin-bottom: 20px;
+            border-left: 4px solid #f44336;
+            background-color: #ffebee;
           }
         </style>
       </head>
@@ -1490,7 +1514,13 @@ app.post('/api/resend-alert', async (req, res) => {
     }
     
     // Get alert from database
-    const alert = await Database.getAlertById(alertId);
+    let alert;
+    try {
+      alert = await Database.getAlertById(alertId);
+    } catch (error) {
+      console.error('Database error when retrieving alert:', error);
+      return res.status(500).json({ error: 'Database connection error: ' + error.message });
+    }
     
     if (!alert) {
       return res.status(404).json({ error: 'Alert not found' });
@@ -1512,7 +1542,7 @@ app.post('/api/resend-alert', async (req, res) => {
     }
   } catch (error) {
     console.error('Error resending alert:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Internal server error: ' + error.message });
   }
 });
 
@@ -1530,7 +1560,13 @@ app.post('/api/resend-alerts-by-scan', async (req, res) => {
     today.setHours(0, 0, 0, 0);
     
     // Get alerts for the scan
-    const alerts = await Database.getAlertsByScan(scanName, today);
+    let alerts;
+    try {
+      alerts = await Database.getAlertsByScan(scanName, today);
+    } catch (error) {
+      console.error('Database error when retrieving alerts by scan:', error);
+      return res.status(500).json({ error: 'Database connection error: ' + error.message });
+    }
     
     if (!alerts || alerts.length === 0) {
       return res.status(404).json({ error: 'No alerts found for this scan' });
@@ -1559,7 +1595,7 @@ app.post('/api/resend-alerts-by-scan', async (req, res) => {
     }
   } catch (error) {
     console.error('Error resending alerts by scan:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Internal server error: ' + error.message });
   }
 });
 

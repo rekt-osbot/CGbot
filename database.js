@@ -321,23 +321,16 @@ class Database {
    */
   async getAlertById(alertId) {
     try {
-      if (!this.client) {
-        await this.connect();
-      }
+      // Connect to database if needed
+      await this.connect();
       
-      const db = this.client.db(this.dbName);
-      const collection = db.collection('alerts');
-      
-      // Convert string ID to ObjectId if needed
-      let objectId;
-      try {
-        objectId = new this.mongodb.ObjectId(alertId);
-      } catch (error) {
-        console.error('Invalid ObjectId format:', error);
+      if (!this.isConnected) {
+        console.warn('MongoDB not connected, cannot retrieve alert by ID');
         return null;
       }
       
-      const alert = await collection.findOne({ _id: objectId });
+      // Use Mongoose model to find alert by ID
+      const alert = await this.models.Alert.findById(alertId);
       return alert;
     } catch (error) {
       console.error('Error getting alert by ID:', error);
@@ -353,23 +346,29 @@ class Database {
    */
   async getAlertsByScan(scanName, afterDate) {
     try {
-      if (!this.client) {
-        await this.connect();
+      // Connect to database if needed
+      await this.connect();
+      
+      if (!this.isConnected) {
+        console.warn('MongoDB not connected, cannot retrieve alerts by scan');
+        return [];
       }
       
-      const db = this.client.db(this.dbName);
-      const collection = db.collection('alerts');
-      
+      // Build query
       const query = { 
-        scan_name: scanName 
+        scanName: scanName 
       };
       
       // Add date filter if provided
       if (afterDate) {
-        query.createdAt = { $gte: afterDate };
+        query.$or = [
+          { createdAt: { $gte: afterDate } },
+          { timestamp: { $gte: afterDate } }
+        ];
       }
       
-      const alerts = await collection.find(query).toArray();
+      // Use Mongoose model to find alerts
+      const alerts = await this.models.Alert.find(query).sort({ timestamp: -1 });
       return alerts;
     } catch (error) {
       console.error('Error getting alerts by scan:', error);
@@ -384,13 +383,15 @@ class Database {
    */
   async getAlertsAfterDate(afterDate) {
     try {
-      if (!this.client) {
-        await this.connect();
+      // Connect to database if needed
+      await this.connect();
+      
+      if (!this.isConnected) {
+        console.warn('MongoDB not connected, cannot retrieve alerts after date');
+        return [];
       }
       
-      const db = this.client.db(this.dbName);
-      const collection = db.collection('alerts');
-      
+      // Build query
       const query = {};
       
       // Add date filter if provided
@@ -401,7 +402,8 @@ class Database {
         ];
       }
       
-      const alerts = await collection.find(query).sort({ timestamp: -1 }).toArray();
+      // Use Mongoose model to find alerts
+      const alerts = await this.models.Alert.find(query).sort({ timestamp: -1 });
       return alerts;
     } catch (error) {
       console.error('Error getting alerts after date:', error);
