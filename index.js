@@ -299,151 +299,94 @@ async function processSingleStock(symbol, scanName) {
   return enrichedData;
 }
 
-// Webhook endpoint to receive alerts from Chartink
+// Process incoming webhooks
 app.post('/webhook', async (req, res) => {
   try {
-    // Verify webhook secret (if provided)
-    const providedSecret = req.headers['x-webhook-secret'];
-    if (WEBHOOK_SECRET && providedSecret !== WEBHOOK_SECRET) {
-      return res.status(403).json({ error: 'Unauthorized' });
-    }
+    console.log('Webhook received:', JSON.stringify(req.body));
     
-    // Record webhook received in status monitor
+    // Record webhook reception in status monitor
     StatusMonitor.recordWebhook();
     
-    const alertData = req.body;
-    console.log('Received alert:', alertData);
+    const data = req.body;
     
-    // Check if we received an array of symbols or a single symbol
-    let symbols = [];
-    let scanName = null;
+    // Check for required fields
+    if (!data) {
+      throw new Error('No data received in webhook');
+    }
     
-    if (Array.isArray(alertData)) {
-      // It's an array of alerts
-      console.log(`Received ${alertData.length} alerts in an array`);
-      
-      // Extract symbols and scan name from the first item if available
-      symbols = alertData.map(item => item.symbol).filter(Boolean);
-      
-      // Try to get a common scan name
-      const firstItemWithScanName = alertData.find(item => item.scan_name);
-      scanName = firstItemWithScanName ? firstItemWithScanName.scan_name : null;
-    } else if (alertData.symbols && Array.isArray(alertData.symbols)) {
-      // Format where multiple symbols are in a 'symbols' array property
-      console.log(`Received ${alertData.symbols.length} symbols in the 'symbols' property`);
-      symbols = alertData.symbols;
-      scanName = alertData.scan_name;
-    } else if (alertData.symbol) {
-      // Single alert
-      symbols = [alertData.symbol];
-      scanName = alertData.scan_name;
-    } else if (alertData.stocks) {
-      // Handle 'stocks' field which might be a string for a single stock
-      console.log(`Received alert with 'stocks' field: ${alertData.stocks}`);
-      
-      if (typeof alertData.stocks === 'string') {
-        // Single stock as a string
-        symbols = [alertData.stocks];
-      } else if (Array.isArray(alertData.stocks)) {
-        // Multiple stocks as an array
-        symbols = alertData.stocks;
-      }
-      
-      // Get scan name from scan_name or alert_name
-      scanName = alertData.scan_name || alertData.alert_name;
-      
-      console.log(`Processed 'stocks' field into symbols: ${symbols.join(', ')}`);
-      console.log(`Using scan name: ${scanName}`);
+    // For backward compatibility, handle both single stock and array of stocks
+    let stocksData = [];
+    
+    if (data.stocks && Array.isArray(data.stocks)) {
+      // New format with 'stocks' field containing array
+      stocksData = data.stocks;
+      console.log(`Processing ${stocksData.length} stocks from webhook`);
+    } else if (data.symbol || data.ticker) {
+      // Legacy format with a single stock in the main object
+      stocksData = [data];
+      console.log('Processing single stock from webhook');
     } else {
-      return res.status(400).json({ error: 'Invalid alert format - no symbols found' });
+      throw new Error('No valid stock data found in webhook payload');
     }
     
-    if (symbols.length === 0) {
-      return res.status(400).json({ error: 'No valid symbols in the alert data' });
+    // Check if we have any valid data
+    if (stocksData.length === 0) {
+      throw new Error('No stocks to process');
     }
     
-    // Process each stock
-    const validStocksData = [];
-    
-    for (const symbol of symbols) {
-      // Skip empty symbols
-      if (!symbol) continue;
-      
-      // Special case for test symbol
-      if (symbol === 'SIMULATED.TEST') {
-        console.log('Processing test symbol with simulated data');
+    // Normalize scan name field 
+    const scanName = data.scan_name || 
+                    (data.scanName) || 
+                    (stocksData[0].scan_name) || 
+                    'Unknown';
+                    
+    // Store data in database
+    try {
+      for (const stock of stocksData) {
+        // Normalize the stock data to make sure it has both symbol and scan_name
+        stock.symbol = stock.symbol || stock.ticker;
+        stock.scan_name = scanName;
+        
+        await Database.storeAlert(stock);
       }
-      
-      const stockData = await processSingleStock(symbol, scanName);
-      if (stockData) {
-        validStocksData.push(stockData);
-      }
+      console.log(`Stored ${stocksData.length} alerts in database`);
+    } catch (dbError) {
+      console.error('Database error while storing alerts:', dbError);
+      StatusMonitor.recordError('database', dbError);
+      // Continue processing even if database fails
     }
     
-    if (validStocksData.length === 0) {
-      return res.status(200).json({ 
-        status: 'ignored', 
-        reason: 'No stocks matched the criteria'
-      });
-    }
-    
-    // Determine if we should send a single stock alert or multiple stocks alert
-    let message;
-    let messageSent = false;
-    
-    if (validStocksData.length === 1 && symbols.length === 1) {
-      // Single stock alert
-      message = formatAlertMessage(validStocksData[0], validStocksData[0].scanType);
+    // Process alerts
+    if (stocksData.length === 1) {
+      // For a single stock, send detailed alert
+      const stock = stocksData[0];
+      const message = formatAlertMessage(stock, scanName);
       
-      // For simulated test symbol, we don't actually send to Telegram but simulate success
-      if (validStocksData[0].symbol === 'SIMULATED.TEST') {
-        console.log('This is a test symbol - not sending actual Telegram message');
-        return res.status(200).json({ status: 'success', message: 'Test alert processed successfully' });
-      }
-      
-      // Store in database if it's not a test symbol
-      await Database.storeAlert(validStocksData[0]);
-      
-      // Record alert in status monitor
-      StatusMonitor.recordAlert(validStocksData[0]);
-      
-      // Track in analytics
-      Analytics.trackAlert(validStocksData[0]);
-      
-      messageSent = await sendTelegramMessage(message);
+      await sendTelegramMessage(message);
+      console.log('Sent single stock alert to Telegram');
     } else {
-      // Multiple stocks alert
-      message = formatMultipleStocksMessage(validStocksData, scanName);
+      // For multiple stocks, send a consolidated message
+      const message = formatMultipleStocksMessage(stocksData, scanName);
       
-      // Store each stock in database
-      for (const stockData of validStocksData) {
-        await Database.storeAlert(stockData);
-        Analytics.trackAlert(stockData);
-      }
-      
-      // Record multiple alerts in status monitor
-      StatusMonitor.recordAlert(validStocksData);
-      
-      messageSent = await sendTelegramMessage(message);
+      await sendTelegramMessage(message);
+      console.log(`Sent consolidated alert for ${stocksData.length} stocks to Telegram`);
     }
     
-    if (messageSent) {
-      res.status(200).json({ 
-        status: 'success', 
-        message: `Alert sent to Telegram for ${validStocksData.length} stock(s)`,
-        stocks: validStocksData.map(s => s.symbol)
-      });
-    } else {
-      res.status(500).json({ 
-        status: 'error', 
-        message: 'Failed to send to Telegram, but alert was processed',
-        stocks: validStocksData.map(s => s.symbol)
-      });
-    }
+    // Send success response
+    res.status(200).json({
+      success: true,
+      message: `Processed ${stocksData.length} stocks`,
+      timestamp: new Date().toISOString()
+    });
   } catch (error) {
     console.error('Error processing webhook:', error);
-    StatusMonitor.recordError('Webhook processing', error);
-    res.status(500).json({ error: 'Internal server error' });
+    StatusMonitor.recordError('webhook', error);
+    
+    res.status(400).json({
+      success: false,
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
   }
 });
 
@@ -698,15 +641,87 @@ app.get('/api/analytics', (req, res) => {
 // Status page endpoint (HTML UI)
 app.get('/status', async (req, res) => {
   try {
-    // Get status data from StatusMonitor
-    const status = StatusMonitor.getStatus();
+    const uptime = process.uptime();
+    const days = Math.floor(uptime / 86400);
+    const hours = Math.floor((uptime % 86400) / 3600);
+    const minutes = Math.floor((uptime % 3600) / 60);
+    const seconds = Math.floor(uptime % 60);
+    const uptimeString = `${days}d ${hours}h ${minutes}m ${seconds}s`;
     
+    // Get MongoDB connection status
+    const dbConnected = Database.isConnected;
+    const systemStatus = dbConnected ? 'healthy' : 'database disconnected';
+    
+    // Get today's date (start of day)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // Get alerts from database
+    let todayAlerts = [];
+    let todayWebhooks = 0;
+    let lastAlert = null;
+    let totalAlerts = 0;
+    let totalWebhooks = StatusMonitor.getTotalWebhooks() || 0;
+    let dbError = null;
+    
+    try {
+      // Try to get alerts and counts, but don't fail if database is down
+      if (dbConnected) {
+        todayAlerts = await Database.getAlertsAfterDate(today);
+        
+        // Count total alerts in DB (approximation)
+        const oneYearAgo = new Date();
+        oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+        const allAlerts = await Database.getAlertsAfterDate(oneYearAgo);
+        totalAlerts = allAlerts ? allAlerts.length : 0;
+        
+        // Get most recent alert
+        if (todayAlerts && todayAlerts.length > 0) {
+          lastAlert = todayAlerts[0]; // Assuming they're already sorted by timestamp desc
+        }
+      }
+    } catch (error) {
+      console.error('Error retrieving database metrics:', error);
+      dbError = error.message;
+      StatusMonitor.recordError('database', error);
+    }
+    
+    // Calculate stats
+    const todayAlertCount = todayAlerts ? todayAlerts.length : 0;
+    
+    // Get today's webhook count and total count from StatusMonitor
+    todayWebhooks = StatusMonitor.getTodayWebhooks() || 0;
+    
+    // Get recent errors
+    const recentErrors = StatusMonitor.getRecentErrors();
+    let errorLog = '';
+    
+    if (recentErrors && recentErrors.length > 0) {
+      recentErrors.forEach(err => {
+        errorLog += `<div class="error-item">
+          <span class="error-time">${new Date(err.timestamp).toLocaleTimeString()}</span>
+          <span class="error-type">${err.type}</span>
+          <span class="error-message">${err.message}</span>
+        </div>`;
+      });
+    } else {
+      errorLog = '<p class="no-errors">No errors recorded recently</p>';
+    }
+    
+    // Format last alert time
+    let lastAlertTime = 'No alerts today';
+    if (lastAlert) {
+      lastAlertTime = `${lastAlert.symbol} at ${new Date(lastAlert.timestamp || lastAlert.createdAt).toLocaleTimeString()}`;
+    }
+    
+    // Prepare status HTML
     res.send(`
       <!DOCTYPE html>
       <html>
       <head>
-        <title>Stock Alerts Status</title>
+        <title>System Status</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta http-equiv="refresh" content="30">
         <style>
           body {
             font-family: Arial, sans-serif;
@@ -714,43 +729,38 @@ app.get('/status', async (req, res) => {
             margin: 0 auto;
             padding: 20px;
           }
-          h1, h2 {
-            color: #333;
-          }
-          .card {
-            background-color: #f9f9f9;
-            border-radius: 4px;
+          .status-container {
+            background-color: #f8f9fa;
+            border-radius: 5px;
             padding: 20px;
             margin-bottom: 20px;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
           }
-          .stat {
+          .status-container h2 {
+            margin-top: 0;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 10px;
+          }
+          .status-row {
             display: flex;
             justify-content: space-between;
+            margin-bottom: 10px;
+            padding: 5px 0;
             border-bottom: 1px solid #eee;
-            padding: 10px 0;
           }
-          .stat-value {
+          .status-label {
             font-weight: bold;
           }
-          .error-list {
-            margin-top: 20px;
-            color: #d32f2f;
+          .status-value {
+            text-align: right;
           }
-          .error-item {
-            background-color: #ffebee;
-            padding: 10px;
-            margin-bottom: 10px;
-            border-left: 4px solid #d32f2f;
+          .healthy {
+            color: #28a745;
           }
-          .good {
-            color: #388e3c;
+          .warning {
+            color: #ffc107;
           }
-          .warn {
-            color: #f57c00;
-          }
-          .bad {
-            color: #d32f2f;
+          .error {
+            color: #dc3545;
           }
           .nav {
             margin-bottom: 20px;
@@ -760,21 +770,39 @@ app.get('/status', async (req, res) => {
             text-decoration: none;
             color: #2196F3;
           }
-          .action-buttons {
-            margin-top: 20px;
+          .error-log {
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            padding: 10px;
+            max-height: 200px;
+            overflow-y: auto;
           }
-          .action-buttons a {
-            display: inline-block;
-            padding: 10px 15px;
-            background-color: #2196F3;
-            color: white;
-            text-decoration: none;
-            border-radius: 4px;
+          .error-item {
+            margin-bottom: 5px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 5px;
+          }
+          .error-time {
+            color: #6c757d;
             margin-right: 10px;
-            margin-bottom: 10px;
           }
-          .action-buttons a:hover {
-            background-color: #0b7dda;
+          .error-type {
+            font-weight: bold;
+            margin-right: 10px;
+          }
+          .error-message {
+            color: #dc3545;
+          }
+          .no-errors {
+            color: #28a745;
+          }
+          .db-error {
+            background-color: #fff3cd;
+            border: 1px solid #ffeeba;
+            color: #856404;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 20px;
           }
         </style>
       </head>
@@ -786,79 +814,76 @@ app.get('/status', async (req, res) => {
           <a href="/resend-alerts">Resend Alerts</a>
         </div>
         
-        <h1>Stock Alerts Status Dashboard</h1>
+        <h1>System Status</h1>
         
-        <div class="action-buttons">
-          <a href="/test-webhook-dashboard">Send Test Webhook</a>
-          <a href="/resend-alerts">Resend Today's Alerts</a>
-          <a href="/test-telegram">Test Telegram</a>
-        </div>
+        ${dbError ? `<div class="db-error">
+          <strong>Database Connection Error:</strong> ${dbError}
+          <p>Some features may be limited. Please check your MongoDB connection settings.</p>
+        </div>` : ''}
         
-        <div class="card">
+        <div class="status-container">
           <h2>System Status</h2>
-          <div class="stat">
-            <div>Uptime</div>
-            <div class="stat-value">${status.uptime}</div>
+          <div class="status-row">
+            <span class="status-label">Uptime</span>
+            <span class="status-value">${uptimeString}</span>
           </div>
-          <div class="stat">
-            <div>System Status</div>
-            <div class="stat-value ${status.health === 'Healthy' ? 'good' : status.health === 'Degraded' ? 'warn' : 'bad'}">${status.health}</div>
+          <div class="status-row">
+            <span class="status-label">System Status</span>
+            <span class="status-value ${dbConnected ? 'healthy' : 'warning'}">${systemStatus}</span>
           </div>
-          <div class="stat">
-            <div>Last Restarted</div>
-            <div class="stat-value">${status.startTime}</div>
+          <div class="status-row">
+            <span class="status-label">Last Restarted</span>
+            <span class="status-value">${new Date(Date.now() - uptime * 1000).toISOString()}</span>
           </div>
         </div>
         
-        <div class="card">
+        <div class="status-container">
           <h2>Stock Alerts</h2>
-          <div class="stat">
-            <div>Alerts Received Today</div>
-            <div class="stat-value">${status.alertsToday}</div>
+          <div class="status-row">
+            <span class="status-label">Alerts Received Today</span>
+            <span class="status-value">${todayAlertCount}</span>
           </div>
-          <div class="stat">
-            <div>Total Alerts</div>
-            <div class="stat-value">${status.totalAlerts}</div>
+          <div class="status-row">
+            <span class="status-label">Total Alerts</span>
+            <span class="status-value">${totalAlerts}${!dbConnected ? ' (estimate)' : ''}</span>
           </div>
-          <div class="stat">
-            <div>Webhooks Received Today</div>
-            <div class="stat-value">${status.webhooksToday}</div>
+          <div class="status-row">
+            <span class="status-label">Webhooks Received Today</span>
+            <span class="status-value">${todayWebhooks}</span>
           </div>
-          <div class="stat">
-            <div>Total Webhooks</div>
-            <div class="stat-value">${status.totalWebhooks}</div>
+          <div class="status-row">
+            <span class="status-label">Total Webhooks</span>
+            <span class="status-value">${totalWebhooks}</span>
           </div>
-          <div class="stat">
-            <div>Last Alert</div>
-            <div class="stat-value">${status.lastAlert}</div>
+          <div class="status-row">
+            <span class="status-label">Last Alert</span>
+            <span class="status-value">${lastAlertTime}</span>
           </div>
         </div>
         
-        <div class="card">
+        <div class="status-container">
           <h2>Error Log</h2>
-          ${status.recentErrors.length === 0 ? '<p>No recent errors.</p>' : ''}
-          <div class="error-list">
-            ${status.recentErrors.map(error => `
-              <div class="error-item">
-                <strong>${error.time}</strong>: ${error.message}
-                ${error.context ? `<br><small>${error.context}</small>` : ''}
-              </div>
-            `).join('')}
+          <div class="error-log">
+            ${errorLog}
           </div>
         </div>
         
-        <script>
-          // Auto refresh the page every 30 seconds
-          setTimeout(() => {
-            window.location.reload();
-          }, 30000);
-        </script>
+        <div class="status-container">
+          <h2>Quick Actions</h2>
+          <div style="display: flex; gap: 10px;">
+            <button onclick="window.location.href='/test-webhook-dashboard'">Test Webhook</button>
+            <button onclick="window.location.href='/test-telegram'">Test Telegram</button>
+            <button onclick="window.location.href='/resend-alerts'">Resend Alerts</button>
+          </div>
+        </div>
+        
+        <p><small>This page auto-refreshes every 30 seconds. Last updated: ${new Date().toLocaleTimeString()}</small></p>
       </body>
       </html>
     `);
   } catch (error) {
-    console.error('Error generating status page:', error);
-    res.status(500).send('Error generating status page');
+    console.error('Error rendering status page:', error);
+    res.status(500).send('Error generating status page: ' + error.message);
   }
 });
 
@@ -1087,145 +1112,205 @@ app.get('/analytics', async (req, res) => {
   `);
 });
 
-// Test webhook endpoint for web dashboard
+// Test webhook dashboard
 app.get('/test-webhook-dashboard', (req, res) => {
-  try {
-    // Render a simple HTML form to test webhooks
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Webhook Test Dashboard</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-          body {
-            font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-          }
-          h1 {
-            color: #333;
-          }
-          .card {
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            padding: 20px;
-            margin-bottom: 20px;
-            background-color: #f9f9f9;
-          }
-          label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: bold;
-          }
-          input, select, textarea {
-            width: 100%;
-            padding: 8px;
-            margin-bottom: 16px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            box-sizing: border-box;
-          }
-          button {
-            background-color: #4CAF50;
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-          }
-          button:hover {
-            background-color: #45a049;
-          }
-          .result {
-            margin-top: 20px;
-            padding: 10px;
-            border-left: 4px solid #2196F3;
-            background-color: #e3f2fd;
-          }
-          .nav {
-            margin-bottom: 20px;
-          }
-          .nav a {
-            margin-right: 15px;
-            text-decoration: none;
-            color: #2196F3;
-          }
-        </style>
-      </head>
-      <body>
-        <div class="nav">
-          <a href="/status">Status</a>
-          <a href="/analytics">Analytics</a>
-          <a href="/test-webhook-dashboard">Test Webhook</a>
-          <a href="/resend-alerts">Resend Alerts</a>
+  // Check database connection
+  const dbConnected = Database.isConnected;
+  const dbConnectMessage = dbConnected ? 
+    '<div class="alert alert-success">MongoDB connected - Webhooks will be stored in the database</div>' :
+    '<div class="alert alert-warning">MongoDB not connected - Webhooks will still work but won\'t be stored in the database. See <a href="/MONGODB-CONNECTION-FIX.md">connection fix guide</a></div>';
+    
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Test Webhook Dashboard</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <style>
+        body {
+          font-family: Arial, sans-serif;
+          max-width: 800px;
+          margin: 0 auto;
+          padding: 20px;
+        }
+        .nav {
+          margin-bottom: 20px;
+        }
+        .nav a {
+          margin-right: 15px;
+          text-decoration: none;
+          color: #2196F3;
+        }
+        .form-group {
+          margin-bottom: 15px;
+        }
+        label {
+          display: block;
+          margin-bottom: 5px;
+          font-weight: bold;
+        }
+        input, textarea, select {
+          width: 100%;
+          padding: 8px;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+          box-sizing: border-box;
+        }
+        button {
+          background-color: #4CAF50;
+          color: white;
+          padding: 10px 15px;
+          border: none;
+          border-radius: 4px;
+          cursor: pointer;
+        }
+        button:hover {
+          background-color: #45a049;
+        }
+        .response {
+          margin-top: 20px;
+          padding: 15px;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+          background-color: #f9f9f9;
+          white-space: pre-wrap;
+          max-height: 300px;
+          overflow-y: auto;
+        }
+        .templates {
+          margin-top: 20px;
+          padding: 15px;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+          background-color: #f9f9f9;
+        }
+        .alert {
+          padding: 12px;
+          margin-bottom: 15px;
+          border-radius: 4px;
+        }
+        .alert-success {
+          background-color: #dff0d8;
+          color: #3c763d;
+          border: 1px solid #d6e9c6;
+        }
+        .alert-warning {
+          background-color: #fcf8e3;
+          color: #8a6d3b;
+          border: 1px solid #faebcc;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="nav">
+        <a href="/status">Status</a>
+        <a href="/analytics">Analytics</a>
+        <a href="/test-webhook-dashboard">Test Webhook</a>
+        <a href="/resend-alerts">Resend Alerts</a>
+      </div>
+      
+      <h1>Test Webhook Dashboard</h1>
+      
+      ${dbConnectMessage}
+      
+      <p>Use this form to test sending webhooks to your bot without needing external tools.</p>
+      
+      <form id="webhook-form">
+        <div class="form-group">
+          <label for="symbol">Stock Symbol:</label>
+          <input type="text" id="symbol" name="symbol" value="RELIANCE" required>
         </div>
         
-        <h1>Webhook Test Dashboard</h1>
+        <div class="form-group">
+          <label for="price">Trigger Price:</label>
+          <input type="number" id="price" name="price" value="2500" step="0.01" required>
+        </div>
         
-        <div class="card">
-          <h2>Send Test Webhook</h2>
-          <form id="webhookForm">
-            <label for="stocks">Stock Symbol:</label>
-            <input type="text" id="stocks" name="stocks" value="RELIANCE" required>
-            
-            <label for="trigger_prices">Trigger Price:</label>
-            <input type="text" id="trigger_prices" name="trigger_prices" value="2500.00">
-            
-            <label for="scan_name">Scan Name:</label>
-            <input type="text" id="scan_name" name="scan_name" value="Test Webhook">
-            
-            <button type="submit">Send Webhook</button>
-          </form>
+        <div class="form-group">
+          <label for="scan_name">Scan Name:</label>
+          <input type="text" id="scan_name" name="scan_name" value="Test Scan" required>
+        </div>
+        
+        <div class="form-group">
+          <label for="format">Webhook Format:</label>
+          <select id="format" name="format">
+            <option value="single">Single Stock</option>
+            <option value="stocks_array">Stocks Array</option>
+          </select>
+        </div>
+        
+        <button type="submit">Send Webhook</button>
+      </form>
+      
+      <div class="response" id="response" style="display: none;"></div>
+      
+      <div class="templates">
+        <h3>Available Templates</h3>
+        <p><strong>Single Stock:</strong> Sends a webhook with a single stock</p>
+        <p><strong>Stocks Array:</strong> Sends a webhook with an array of stocks in the "stocks" field</p>
+      </div>
+      
+      <script>
+        document.getElementById('webhook-form').addEventListener('submit', async (event) => {
+          event.preventDefault();
           
-          <div id="result" class="result" style="display: none;"></div>
-        </div>
-        
-        <script>
-          document.getElementById('webhookForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            
-            const resultDiv = document.getElementById('result');
-            resultDiv.style.display = 'block';
-            resultDiv.innerHTML = 'Sending webhook...';
-            
-            const payload = {
-              stocks: document.getElementById('stocks').value,
-              trigger_prices: document.getElementById('trigger_prices').value,
-              triggered_at: new Date().toLocaleTimeString(),
-              scan_name: document.getElementById('scan_name').value,
-              alert_name: document.getElementById('scan_name').value
+          // Get form values
+          const symbol = document.getElementById('symbol').value;
+          const price = document.getElementById('price').value;
+          const scanName = document.getElementById('scan_name').value;
+          const format = document.getElementById('format').value;
+          
+          // Prepare payload based on format
+          let payload;
+          
+          if (format === 'single') {
+            payload = {
+              symbol: symbol,
+              close: parseFloat(price),
+              scan_name: scanName,
+              timestamp: new Date().toISOString()
             };
+          } else if (format === 'stocks_array') {
+            payload = {
+              scan_name: scanName,
+              stocks: [
+                {
+                  symbol: symbol,
+                  close: parseFloat(price),
+                  timestamp: new Date().toISOString()
+                }
+              ]
+            };
+          }
+          
+          // Show loading state
+          const responseDiv = document.getElementById('response');
+          responseDiv.style.display = 'block';
+          responseDiv.textContent = 'Sending webhook...';
+          
+          try {
+            // Send webhook
+            const response = await fetch('/webhook', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(payload)
+            });
             
-            try {
-              const response = await fetch('/webhook', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(payload)
-              });
-              
-              const data = await response.json();
-              
-              if (response.ok) {
-                resultDiv.innerHTML = '<strong>Success!</strong><br>Webhook sent and processed successfully.<br>Check your Telegram for the alert.<br><pre>' + JSON.stringify(data, null, 2) + '</pre>';
-              } else {
-                resultDiv.innerHTML = '<strong>Error!</strong><br>Webhook returned an error:<br><pre>' + JSON.stringify(data, null, 2) + '</pre>';
-              }
-            } catch (error) {
-              resultDiv.innerHTML = '<strong>Error!</strong><br>Failed to send webhook: ' + error.message;
-            }
-          });
-        </script>
-      </body>
-      </html>
-    `);
-  } catch (error) {
-    console.error('Error rendering test webhook page:', error);
-    res.status(500).send('Internal Server Error');
-  }
+            // Parse response
+            const data = await response.json();
+            
+            // Display response
+            responseDiv.textContent = JSON.stringify(data, null, 2);
+          } catch (error) {
+            responseDiv.textContent = 'Error: ' + error.message;
+          }
+        });
+      </script>
+    </body>
+    </html>
+  `);
 });
 
 // Endpoint to view and resend alerts from today
@@ -1597,6 +1682,11 @@ app.post('/api/resend-alerts-by-scan', async (req, res) => {
     console.error('Error resending alerts by scan:', error);
     res.status(500).json({ error: 'Internal server error: ' + error.message });
   }
+});
+
+// Serve the MongoDB connection fix guide
+app.get('/MONGODB-CONNECTION-FIX.md', (req, res) => {
+  res.sendFile(path.join(__dirname, 'MONGODB-CONNECTION-FIX.md'));
 });
 
 // Graceful shutdown handler

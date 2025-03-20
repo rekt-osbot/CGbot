@@ -18,6 +18,8 @@ class StatusMonitor {
       telegramErrors: 0,
       dataFetchErrors: 0,
       webhooksReceived: 0,
+      webhooksToday: 0,
+      lastWebhookTime: null,
       lastHealthCheck: null
     };
     
@@ -32,8 +34,39 @@ class StatusMonitor {
     
     this.loadStatus();
     
+    // Reset daily counts if it's a new day
+    this.resetDailyCounts();
+    
     // Schedule periodic status saving
     setInterval(() => this.saveStatus(), 5 * 60 * 1000); // Save every 5 minutes
+    
+    // Schedule daily reset at midnight
+    setInterval(() => this.resetDailyCounts(), 60 * 60 * 1000); // Check every hour
+  }
+  
+  /**
+   * Reset daily counts if it's a new day
+   */
+  resetDailyCounts() {
+    try {
+      const now = new Date();
+      const lastReset = this.metrics.lastDailyReset ? new Date(this.metrics.lastDailyReset) : null;
+      
+      // If we've never reset or it's a new day
+      if (!lastReset || now.getDate() !== lastReset.getDate() || 
+          now.getMonth() !== lastReset.getMonth() || 
+          now.getFullYear() !== lastReset.getFullYear()) {
+        
+        // Reset daily counts
+        this.metrics.webhooksToday = 0;
+        this.metrics.lastDailyReset = now.toISOString();
+        
+        console.log('Daily metrics reset', now.toISOString());
+        this.saveStatus();
+      }
+    } catch (error) {
+      console.error('Error resetting daily counts:', error);
+    }
   }
   
   /**
@@ -116,27 +149,34 @@ class StatusMonitor {
    */
   recordWebhook() {
     this.metrics.webhooksReceived++;
+    this.metrics.webhooksToday++;
+    this.metrics.lastWebhookTime = new Date().toISOString();
+    
+    // Save status occasionally to reduce I/O
+    if (this.metrics.webhooksReceived % 10 === 0) {
+      this.saveStatus();
+    }
   }
   
   /**
    * Record an error that occurred
-   * @param {string} context - Where the error occurred
+   * @param {string} type - Type of error (e.g., 'telegram', 'database')
    * @param {Error} error - The error object
    */
-  recordError(context, error) {
+  recordError(type, error) {
     try {
       // Determine error type
-      if (context.includes('Telegram')) {
+      if (type.includes('telegram') || type === 'telegram') {
         this.metrics.telegramErrors++;
-      } else if (context.includes('data') || context.includes('fetch')) {
+      } else if (type.includes('data') || type.includes('fetch')) {
         this.metrics.dataFetchErrors++;
       }
       
       // Add to errors list
       this.errors.unshift({
         timestamp: new Date().toISOString(),
-        context,
-        message: error.message,
+        type: type || 'unknown',
+        message: error.message || error.toString(),
         stack: error.stack
       });
       
@@ -148,7 +188,7 @@ class StatusMonitor {
       // Always save when errors occur
       this.saveStatus();
       
-      console.error(`${context}:`, error);
+      console.error(`${type} error:`, error);
     } catch (err) {
       console.error('Error while recording error:', err);
     }
@@ -211,6 +251,31 @@ class StatusMonitor {
     const days = Math.floor(hours / 24);
     
     return `${days}d ${hours % 24}h ${minutes % 60}m ${seconds % 60}s`;
+  }
+  
+  /**
+   * Get the total number of webhooks received
+   * @returns {number} Total webhooks
+   */
+  getTotalWebhooks() {
+    return this.metrics.webhooksReceived || 0;
+  }
+  
+  /**
+   * Get the number of webhooks received today
+   * @returns {number} Today's webhooks
+   */
+  getTodayWebhooks() {
+    return this.metrics.webhooksToday || 0;
+  }
+  
+  /**
+   * Get recent errors
+   * @param {number} limit - Maximum number of errors to return
+   * @returns {Array} Recent errors
+   */
+  getRecentErrors(limit = 10) {
+    return this.errors.slice(0, limit);
   }
 }
 
