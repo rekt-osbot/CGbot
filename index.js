@@ -176,7 +176,7 @@ async function sendTelegramMessage(message) {
   if (telegramError) {
     console.log('Would send to Telegram:', message);
     console.log('(Telegram messages disabled due to previous error)');
-    return;
+    return false; // Return false to indicate message wasn't sent
   }
   
   try {
@@ -213,7 +213,15 @@ async function sendTelegramMessage(message) {
       console.log('4. Looking for the "chat":{"id":XXXXXXXX} value');
       console.log('Current chat ID:', chatId);
       telegramError = true;
+    } else if (error.message.includes('Unauthorized') || error.message.includes('bot was blocked')) {
+      console.log('Please verify the TELEGRAM_BOT_TOKEN in your .env file');
+      console.log('There may be an issue with your bot token or the bot might have been blocked');
+      telegramError = true;
+    } else if (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND') {
+      console.log('Network error when connecting to Telegram API. This might be temporary.');
+      // Don't set telegramError flag for temporary network issues
     }
+    
     return false;
   }
 }
@@ -329,6 +337,23 @@ app.post('/webhook', async (req, res) => {
       // Single alert
       symbols = [alertData.symbol];
       scanName = alertData.scan_name;
+    } else if (alertData.stocks) {
+      // Handle 'stocks' field which might be a string for a single stock
+      console.log(`Received alert with 'stocks' field: ${alertData.stocks}`);
+      
+      if (typeof alertData.stocks === 'string') {
+        // Single stock as a string
+        symbols = [alertData.stocks];
+      } else if (Array.isArray(alertData.stocks)) {
+        // Multiple stocks as an array
+        symbols = alertData.stocks;
+      }
+      
+      // Get scan name from scan_name or alert_name
+      scanName = alertData.scan_name || alertData.alert_name;
+      
+      console.log(`Processed 'stocks' field into symbols: ${symbols.join(', ')}`);
+      console.log(`Using scan name: ${scanName}`);
     } else {
       return res.status(400).json({ error: 'Invalid alert format - no symbols found' });
     }
@@ -1111,7 +1136,18 @@ app.get('/analytics', async (req, res) => {
 // Graceful shutdown handler
 const gracefulShutdown = () => {
   console.log('Received shutdown signal');
-  StatusMonitor.recordEvent('shutdown', 'Graceful shutdown initiated');
+  
+  try {
+    // Only call StatusMonitor.recordEvent if it exists
+    if (StatusMonitor && typeof StatusMonitor.recordEvent === 'function') {
+      StatusMonitor.recordEvent('shutdown', 'Graceful shutdown initiated');
+    } else if (StatusMonitor && typeof StatusMonitor.recordError === 'function') {
+      // Fallback to recordError if recordEvent doesn't exist
+      StatusMonitor.recordError('shutdown', 'Graceful shutdown initiated');
+    }
+  } catch (error) {
+    console.error('Error recording shutdown event:', error);
+  }
   
   // Set a flag to indicate planned shutdown - prevents duplicate notifications
   global.isShuttingDown = true;
@@ -1226,41 +1262,48 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // Start the server
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Telegram bot token: ${botToken ? `${botToken.substring(0, 5)}...${botToken.substring(botToken.length - 5)}` : 'Not provided'}`);
   console.log(`Telegram chat ID: ${chatId || 'Not provided'}`);
   
   // Test Telegram connection
   console.log('Testing Telegram connection...');
-  bot.getMe()
-    .then(me => {
-      console.log(`Connected to Telegram as @${me.username}`);
-      
-      // Schedule daily summary
-      const summaryJob = scheduleDailySummary();
-      
-      // Only send startup message if not restarted by the stable runner
-      // and if not running on Railway in production mode
-      const isStableRunner = process.env.STABLE_RUNNER === 'true';
-      const isRailwayProduction = process.env.RAILWAY_ENVIRONMENT === 'production';
-      
-      if (!isStableRunner && !global.startupMessageSent && !isRailwayProduction) {
-        sendTelegramMessage('🚀 Stock Alerts Service is now running!')
-          .then(() => {
-            console.log('Startup notification sent to Telegram');
-            global.startupMessageSent = true;
-          })
-          .catch(err => {
-            console.error('Failed to send startup notification:', err);
-          });
-      } else {
-        console.log('Skipping startup notification (stable runner or Railway production environment)');
-        global.startupMessageSent = true;
+  try {
+    const me = await bot.getMe();
+    console.log(`Connected to Telegram as @${me.username}`);
+    
+    // Reset telegramError flag if we successfully connected
+    telegramError = false;
+    
+    // Schedule daily summary
+    const summaryJob = scheduleDailySummary();
+    
+    // Only send startup message if not restarted by the stable runner
+    // and if not running on Railway in production mode
+    const isStableRunner = process.env.STABLE_RUNNER === 'true';
+    const isRailwayProduction = process.env.RAILWAY_ENVIRONMENT === 'production';
+    
+    if (!isStableRunner && !global.startupMessageSent && !isRailwayProduction) {
+      try {
+        const messageSent = await sendTelegramMessage('🚀 Stock Alerts Service is now running!');
+        if (messageSent) {
+          console.log('Startup notification sent to Telegram');
+          global.startupMessageSent = true;
+        } else {
+          console.error('Failed to send startup notification');
+        }
+      } catch (err) {
+        console.error('Error sending startup notification:', err);
       }
-    })
-    .catch(error => {
-      console.error('Failed to connect to Telegram:', error);
-      telegramError = true;
-    });
+    } else {
+      console.log('Skipping startup notification (stable runner or Railway production environment)');
+      global.startupMessageSent = true;
+    }
+  } catch (error) {
+    console.error('Failed to connect to Telegram:', error);
+    telegramError = true;
+    console.log('WARNING: Telegram connection failed, but webhook server is still running.');
+    console.log('Alerts will be processed but not sent to Telegram until the connection issue is resolved.');
+  }
 }); 
