@@ -55,6 +55,25 @@ function calculateStopLoss(dayLow, sma20) {
 // Format message for a single stock alert
 function formatSingleStockAlert(data, scanType = 'default') {
   const { symbol, open, low, high, close, volume, sma20 } = data;
+  
+  // Handle cases where stock data isn't fully populated
+  if (!open || !close) {
+    // Basic format for webhook data without full stock info
+    const stockSymbol = data.symbol || data.stocks;
+    let message = `📈 *${stockSymbol}*`;
+    
+    if (data.trigger_price || data.trigger_prices) {
+      message += ` ₹${data.trigger_price || data.trigger_prices}`;
+    }
+    
+    if (data.triggered_at) {
+      message += `\n⏰ ${data.triggered_at}`;
+    }
+    
+    return message;
+  }
+  
+  // For fully populated stock data
   const stopLoss = calculateStopLoss(low, sma20);
   
   // Always calculate percent change from open price
@@ -82,7 +101,35 @@ function formatSingleStockAlert(data, scanType = 'default') {
 function formatAlertMessage(data, scanType = 'default', isMultiple = false) {
   // If it's a single stock and not part of a multiple alert
   if (!isMultiple) {
+    // Handle cases where stock data might not have been enriched yet
     const { symbol, open, low, high, close, sma20 } = data;
+    
+    // If we only have basic data (like from webhook trigger), show limited info
+    if (!open || !close) {
+      // Simple format for webhook triggers without full data
+      let message = `🚨 *STOCK ALERT: ${data.symbol || data.stocks}* 🚨\n\n`;
+      
+      // Add scan type if provided
+      if (data.scan_name) {
+        message += `📊 *Scan*: ${data.scan_name}\n\n`;
+      }
+      
+      // Add trigger price if available
+      if (data.trigger_price || data.trigger_prices) {
+        message += `📈 *Trigger Price*: ₹${data.trigger_price || data.trigger_prices}\n\n`;
+      }
+      
+      // Add triggered time if available
+      if (data.triggered_at) {
+        message += `⏰ *Triggered at*: ${data.triggered_at}\n\n`;
+      }
+      
+      message += `⚠️ Stock alert triggered`;
+      
+      return message;
+    }
+    
+    // For fully enriched data with price info
     const stopLoss = calculateStopLoss(low, sma20);
     
     // Always calculate percent change from open price
@@ -137,34 +184,60 @@ function formatMultipleStocksMessage(stocksData, scanName) {
   // Add timestamp
   message += `⏰ *Time*: ${new Date().toLocaleTimeString()}\n\n`;
   
-  // Sort stocks by stop loss distance (smallest first)
-  // This prioritizes stocks closest to their stop loss
-  const sortedStocks = [...stocksData].sort((a, b) => {
-    // First, make sure slDistance is calculated
-    if (a.slDistance === undefined) {
-      const aStopLoss = calculateStopLoss(a.low, a.sma20);
-      a.slDistance = ((a.close - aStopLoss) / a.close * 100);
-    }
-    
-    if (b.slDistance === undefined) {
-      const bStopLoss = calculateStopLoss(b.low, b.sma20);
-      b.slDistance = ((b.close - bStopLoss) / b.close * 100);
-    }
-    
-    // Sort by stop loss distance (ascending)
-    return a.slDistance - b.slDistance;
-  });
+  // Check if we have stocks with complete data or just webhook data
+  const hasFullData = stocksData.some(stock => stock.open && stock.close);
   
-  // Add each stock
-  sortedStocks.forEach((stock, index) => {
-    message += `${index + 1}. ${formatSingleStockAlert(stock, stock.scanType)}`;
-  });
-  
-  // Add footer
-  if (scanName && scanName.toLowerCase().includes('open=low')) {
-    message += `\n⚠️ All stocks opened at their low and are trading above 20 SMA`;
+  if (hasFullData) {
+    // Sort stocks by stop loss distance (smallest first) when we have full data
+    // This prioritizes stocks closest to their stop loss
+    const sortedStocks = [...stocksData].sort((a, b) => {
+      // First, make sure slDistance is calculated
+      if (a.slDistance === undefined && a.low && a.close) {
+        const aStopLoss = calculateStopLoss(a.low, a.sma20);
+        a.slDistance = ((a.close - aStopLoss) / a.close * 100);
+      }
+      
+      if (b.slDistance === undefined && b.low && b.close) {
+        const bStopLoss = calculateStopLoss(b.low, b.sma20);
+        b.slDistance = ((b.close - bStopLoss) / b.close * 100);
+      }
+      
+      // If we can't calculate for either stock, use default order
+      if (a.slDistance === undefined || b.slDistance === undefined) {
+        return 0;
+      }
+      
+      return a.slDistance - b.slDistance;
+    });
+    
+    // Add each stock to the message
+    sortedStocks.forEach((stock, index) => {
+      message += formatSingleStockAlert(stock, scanName);
+      
+      // Add separator between stocks
+      if (index < sortedStocks.length - 1) {
+        message += '\n\n' + '─'.repeat(20) + '\n\n';
+      }
+    });
   } else {
-    message += `\n⚠️ ${stocksData.length} stocks sorted by smallest stop loss %`;
+    // Simplified format for webhook data without full stock info
+    stocksData.forEach((stock, index) => {
+      const symbol = stock.symbol || stock.stocks;
+      message += `*${index + 1}. ${symbol}*\n`;
+      
+      if (stock.trigger_price || stock.trigger_prices) {
+        message += `Price: ₹${stock.trigger_price || stock.trigger_prices}\n`;
+      }
+      
+      if (stock.triggered_at) {
+        message += `Time: ${stock.triggered_at}\n`;
+      }
+      
+      // Add separator between stocks
+      if (index < stocksData.length - 1) {
+        message += '\n';
+      }
+    });
   }
   
   return message;
@@ -317,10 +390,23 @@ app.post('/webhook', async (req, res) => {
     // For backward compatibility, handle both single stock and array of stocks
     let stocksData = [];
     
-    if (data.stocks && Array.isArray(data.stocks)) {
-      // New format with 'stocks' field containing array
-      stocksData = data.stocks;
-      console.log(`Processing ${stocksData.length} stocks from webhook`);
+    if (data.stocks) {
+      if (Array.isArray(data.stocks)) {
+        // Format with 'stocks' field containing array
+        stocksData = data.stocks;
+        console.log(`Processing ${stocksData.length} stocks from webhook array`);
+      } else if (typeof data.stocks === 'string') {
+        // Format with 'stocks' field containing a single stock symbol as string
+        stocksData = [{
+          symbol: data.stocks,
+          trigger_price: data.trigger_prices,
+          triggered_at: data.triggered_at,
+          scan_name: data.scan_name,
+          scan_url: data.scan_url,
+          alert_name: data.alert_name
+        }];
+        console.log('Processing single stock from webhook stocks string');
+      }
     } else if (data.symbol || data.ticker) {
       // Legacy format with a single stock in the main object
       stocksData = [data];

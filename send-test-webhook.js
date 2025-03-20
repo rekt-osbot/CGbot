@@ -10,7 +10,7 @@ const webhookUrl = 'https://cgalerts-production.up.railway.app/webhook';
 
 // Test payload matching the format your platform uses
 const payload = {
-  stocks: 'RELIANCE',  // Using 'stocks' field instead of 'symbol'
+  stocks: 'RELIANCE',  // Using 'stocks' field as a string (single stock symbol)
   trigger_prices: '2500.00',
   triggered_at: new Date().toLocaleTimeString(),
   scan_name: 'Test Webhook (Manually Sent)',
