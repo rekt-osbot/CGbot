@@ -195,6 +195,31 @@ class StatusMonitor {
   }
   
   /**
+   * Record a system event
+   * @param {string} category - Category of the event (e.g., 'scheduledTask', 'shutdown')
+   * @param {string} message - Description of the event
+   */
+  recordEvent(category, message) {
+    try {
+      // Add to events list if we want to track events in the future
+      console.log(`Event [${category}]: ${message}`);
+      
+      // We could add event tracking in metrics if needed:
+      // if (!this.metrics.events) this.metrics.events = [];
+      // this.metrics.events.unshift({
+      //   timestamp: new Date().toISOString(),
+      //   category,
+      //   message
+      // });
+      
+      // Save status occasionally
+      this.saveStatus();
+    } catch (err) {
+      console.error('Error while recording event:', err);
+    }
+  }
+  
+  /**
    * Update health check timestamp
    */
   recordHealthCheck() {
