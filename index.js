@@ -444,16 +444,52 @@ app.post('/webhook', async (req, res) => {
     
     // Process alerts
     if (stocksData.length === 1) {
-      // For a single stock, send detailed alert
-      const stock = stocksData[0];
-      const message = formatAlertMessage(stock, scanName);
-      
-      await sendTelegramMessage(message);
-      console.log('Sent single stock alert to Telegram');
+      // For a single stock, process to get full information including SL
+      const symbol = stocksData[0].symbol || stocksData[0].stocks;
+      if (symbol) {
+        // Process the stock to get full data with SMA and stop loss
+        const enrichedData = await processSingleStock(symbol, scanName);
+        if (enrichedData) {
+          // Send detailed alert with stop loss
+          const message = formatAlertMessage(enrichedData, scanName);
+          await sendTelegramMessage(message);
+          console.log('Sent enriched single stock alert to Telegram');
+        } else {
+          // Fall back to basic alert if processing fails
+          const message = formatAlertMessage(stocksData[0], scanName);
+          await sendTelegramMessage(message);
+          console.log('Sent basic single stock alert to Telegram');
+        }
+      } else {
+        // No symbol found, send basic alert
+        const message = formatAlertMessage(stocksData[0], scanName);
+        await sendTelegramMessage(message);
+        console.log('Sent single stock alert to Telegram');
+      }
     } else {
-      // For multiple stocks, send a consolidated message
-      const message = formatMultipleStocksMessage(stocksData, scanName);
+      // For multiple stocks, process each to get full information
+      const enrichedStocksData = [];
       
+      // Try to enrich each stock with full data
+      for (const stock of stocksData) {
+        const symbol = stock.symbol || stock.stocks;
+        if (symbol) {
+          // Process the stock to get full data with SMA and stop loss
+          const enrichedData = await processSingleStock(symbol, scanName);
+          if (enrichedData) {
+            enrichedStocksData.push(enrichedData);
+          } else {
+            // If processing fails, use original data
+            enrichedStocksData.push(stock);
+          }
+        } else {
+          // No symbol, use original data
+          enrichedStocksData.push(stock);
+        }
+      }
+      
+      // Send consolidated message with all stocks
+      const message = formatMultipleStocksMessage(enrichedStocksData.length > 0 ? enrichedStocksData : stocksData, scanName);
       await sendTelegramMessage(message);
       console.log(`Sent consolidated alert for ${stocksData.length} stocks to Telegram`);
     }
