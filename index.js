@@ -450,12 +450,25 @@ app.post('/webhook', async (req, res) => {
         // Process the stock to get full data with SMA and stop loss
         const enrichedData = await processSingleStock(symbol, scanName);
         if (enrichedData) {
+          // The processSingleStock function already calls StockSummary.trackStock()
           // Send detailed alert with stop loss
           const message = formatAlertMessage(enrichedData, scanName);
           await sendTelegramMessage(message);
           console.log('Sent enriched single stock alert to Telegram');
         } else {
           // Fall back to basic alert if processing fails
+          // Create minimal enriched data for tracking
+          const basicData = {
+            symbol: symbol,
+            open: stocksData[0].trigger_price || stocksData[0].price || 100,
+            close: stocksData[0].trigger_price || stocksData[0].price || 100,
+            low: stocksData[0].trigger_price || stocksData[0].price || 95,
+            high: stocksData[0].trigger_price || stocksData[0].price || 105,
+            scan_name: scanName
+          };
+          // Manually track this stock
+          StockSummary.trackStock(basicData);
+          
           const message = formatAlertMessage(stocksData[0], scanName);
           await sendTelegramMessage(message);
           console.log('Sent basic single stock alert to Telegram');
@@ -477,9 +490,22 @@ app.post('/webhook', async (req, res) => {
           // Process the stock to get full data with SMA and stop loss
           const enrichedData = await processSingleStock(symbol, scanName);
           if (enrichedData) {
+            // processSingleStock already calls StockSummary.trackStock()
             enrichedStocksData.push(enrichedData);
           } else {
-            // If processing fails, use original data
+            // If processing fails, track with basic data
+            const basicData = {
+              symbol: symbol,
+              open: stock.trigger_price || stock.price || 100,
+              close: stock.trigger_price || stock.price || 100,
+              low: stock.trigger_price || stock.price || 95,
+              high: stock.trigger_price || stock.price || 105,
+              scan_name: scanName
+            };
+            // Manually track this stock
+            StockSummary.trackStock(basicData);
+            
+            // Use original data in message
             enrichedStocksData.push(stock);
           }
         } else {
@@ -584,6 +610,11 @@ async function generateAndSendDailySummary() {
     
     if (sent) {
       console.log('Daily summary sent successfully');
+      
+      // Clear the tracked stocks for a fresh start tomorrow
+      await StockSummary.clearData();
+      console.log('Cleared tracked stocks data for the next day');
+      
       return true;
     } else {
       console.error('Failed to send daily summary to Telegram');
