@@ -9,8 +9,8 @@ require('dotenv').config();
 const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const StockDataService = require('./stockData');
-const StockSummary = require('./stockSummary');
-const Database = require('./database');
+const StockSummary = require('./StockSummary');
+const Database = require('./Database');
 const axios = require('axios');
 const readline = require('readline');
 

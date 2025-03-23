@@ -7,10 +7,11 @@ const stockData = require('./stockData-enhanced.js');
 const StockSummary = require('./stockSummary');
 const path = require('path');
 const fs = require('fs');
-const statusMonitor = require('./status');
+const StatusMonitor = require('./status');
 const Analytics = require('./analytics');
 const Database = require('./database');
 const { enhancedDashboard, apiStatus } = require('./enhanced-dashboard');
+const { formatAlertMessage, formatMultipleStocksMessage } = require('./telegramFormats');
 
 // Initialize Express app
 const app = express();
@@ -402,10 +403,10 @@ function processChartinkWebhook(data) {
 // Process incoming webhooks
 app.post('/webhook', async (req, res) => {
   console.log('Received webhook:', JSON.stringify(req.body, null, 2));
-  
+    
   try {
     // Record webhook reception in status monitor
-    statusMonitor.recordWebhook();
+    StatusMonitor.recordWebhook();
     
     let stocksData = [];
     const data = req.body;
@@ -437,6 +438,7 @@ app.post('/webhook', async (req, res) => {
     
     // Check if we have any valid data
     if (stocksData.length === 0) {
+      console.error('No stocks to process after filtering data');
       throw new Error('No stocks to process');
     }
     
@@ -447,7 +449,20 @@ app.post('/webhook', async (req, res) => {
                     (data.scanName) || 
                     (stocksData[0].scan_name) || 
                     'Unknown';
+    
+    console.log(`Using scan name: ${scanName}`);
                     
+    // Verify the formatAlertMessage function exists
+    if (typeof formatAlertMessage !== 'function') {
+      console.error('formatAlertMessage function is not defined. This is a critical error.');
+      // Try to find the function in global scope
+      console.log('Available functions in this scope:', 
+        Object.keys(global).filter(key => typeof global[key] === 'function'));
+      throw new Error('formatAlertMessage function is not defined');
+    } else {
+      console.log('formatAlertMessage function is available');
+    }
+    
     // Store data in database
     try {
       console.log('Attempting to store in database...');
@@ -456,12 +471,17 @@ app.post('/webhook', async (req, res) => {
         stock.symbol = stock.symbol || stock.ticker;
         stock.scan_name = scanName;
         
-        await Database.storeAlert(stock);
+        try {
+          await Database.storeAlert(stock);
+          console.log(`Successfully stored alert for ${stock.symbol}`);
+        } catch (storeError) {
+          console.error(`Error storing alert for ${stock.symbol}:`, storeError);
+        }
       }
       console.log(`Stored ${stocksData.length} alerts in database`);
     } catch (dbError) {
       console.error('Database error while storing alerts:', dbError);
-      statusMonitor.recordError('database', dbError);
+      StatusMonitor.recordError('database', dbError);
       // Continue processing even if database fails
     }
     
@@ -469,38 +489,66 @@ app.post('/webhook', async (req, res) => {
     if (stocksData.length === 1) {
       // For a single stock, process to get full information including SL
       const symbol = stocksData[0].symbol || stocksData[0].stocks;
+      console.log(`Processing single stock: ${symbol}`);
+      
       if (symbol) {
-        // Process the stock to get full data with SMA and stop loss
-        const enrichedData = await processSingleStock(symbol, scanName);
-        if (enrichedData) {
-          // The processSingleStock function already calls StockSummary.trackStock()
-          // Send detailed alert with stop loss
-          const message = formatAlertMessage(enrichedData, scanName);
-          await sendTelegramMessage(message);
-          console.log('Sent enriched single stock alert to Telegram');
-        } else {
-          // Fall back to basic alert if processing fails
-          // Create minimal enriched data for tracking
-          const basicData = {
-            symbol: symbol,
-            open: stocksData[0].trigger_price || stocksData[0].price || 100,
-            close: stocksData[0].trigger_price || stocksData[0].price || 100,
-            low: stocksData[0].trigger_price || stocksData[0].price || 95,
-            high: stocksData[0].trigger_price || stocksData[0].price || 105,
-            scan_name: scanName
-          };
-          // Manually track this stock
-          StockSummary.trackStock(basicData);
+        try {
+          // Process the stock to get full data with SMA and stop loss
+          console.log(`Fetching data for ${symbol}...`);
+          const enrichedData = await processSingleStock(symbol, scanName);
           
-          const message = formatAlertMessage(stocksData[0], scanName);
-          await sendTelegramMessage(message);
-          console.log('Sent basic single stock alert to Telegram');
+          if (enrichedData) {
+            console.log('Successfully retrieved enriched data:', JSON.stringify(enrichedData, null, 2));
+            // The processSingleStock function already calls StockSummary.trackStock()
+            // Send detailed alert with stop loss
+            console.log('Formatting alert message...');
+            const message = formatAlertMessage(enrichedData, scanName);
+            console.log('Sending Telegram message...');
+            await sendTelegramMessage(message);
+            console.log('Sent enriched single stock alert to Telegram');
+          } else {
+            console.log('Failed to get enriched data, falling back to basic alert');
+            // Fall back to basic alert if processing fails
+            // Create minimal enriched data for tracking
+            const basicData = {
+              symbol: symbol,
+              open: stocksData[0].trigger_price || stocksData[0].price || 100,
+              close: stocksData[0].trigger_price || stocksData[0].price || 100,
+              low: stocksData[0].trigger_price || stocksData[0].price || 95,
+              high: stocksData[0].trigger_price || stocksData[0].price || 105,
+              scan_name: scanName
+            };
+            // Manually track this stock
+            console.log('Tracking basic stock data');
+            StockSummary.trackStock(basicData);
+            
+            console.log('Formatting basic alert message...');
+            const message = formatAlertMessage(stocksData[0], scanName);
+            console.log('Sending basic Telegram message...');
+            await sendTelegramMessage(message);
+            console.log('Sent basic single stock alert to Telegram');
+          }
+        } catch (processError) {
+          console.error(`Error processing stock ${symbol}:`, processError);
+          // Send a basic alert anyway
+          try {
+            const message = formatAlertMessage(stocksData[0], scanName);
+            await sendTelegramMessage(message);
+            console.log('Sent fallback alert to Telegram after processing error');
+          } catch (msgError) {
+            console.error('Error sending fallback message:', msgError);
+          }
         }
       } else {
+        console.log('No symbol found in data, sending basic alert');
         // No symbol found, send basic alert
-        const message = formatAlertMessage(stocksData[0], scanName);
-        await sendTelegramMessage(message);
-        console.log('Sent single stock alert to Telegram');
+        try {
+          const message = formatAlertMessage(stocksData[0], scanName);
+          await sendTelegramMessage(message);
+          console.log('Sent single stock alert to Telegram (no symbol)');
+        } catch (msgError) {
+          console.error('Error sending basic message:', msgError);
+        }
       }
     } else {
       // For multiple stocks, process each to get full information
@@ -551,7 +599,7 @@ app.post('/webhook', async (req, res) => {
     });
   } catch (error) {
     console.error('Error processing webhook:', error);
-    statusMonitor.recordError('webhook', error);
+    StatusMonitor.recordError('webhook', error);
     
     res.status(400).json({
       success: false,
@@ -645,7 +693,7 @@ async function generateAndSendDailySummary() {
     }
   } catch (error) {
     console.error('Error generating daily summary:', error);
-    statusMonitor.recordError('Daily summary generation', error);
+    StatusMonitor.recordError('Daily summary generation', error);
     return false;
   }
 }
@@ -668,7 +716,7 @@ app.get('/daily-summary', async (req, res) => {
     }
   } catch (error) {
     console.error('Error generating daily summary:', error);
-    statusMonitor.recordError('Manual daily summary', error);
+    StatusMonitor.recordError('Manual daily summary', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -692,7 +740,7 @@ function scheduleDailySummary() {
         fs.writeFileSync(lockFilePath, new Date().toISOString());
         
         console.log('Running daily summary job');
-        statusMonitor.recordEvent('scheduledTask', 'Daily summary started');
+        StatusMonitor.recordEvent('scheduledTask', 'Daily summary started');
         
         await generateAndSendDailySummary();
         
@@ -702,7 +750,7 @@ function scheduleDailySummary() {
         }
       } catch (error) {
         console.error('Error in scheduled summary job:', error);
-        statusMonitor.recordError('dailySummaryJob', error.message);
+        StatusMonitor.recordError('dailySummaryJob', error.message);
         
         // Remove lockfile on error too
         if (fs.existsSync(lockFilePath)) {
@@ -715,7 +763,7 @@ function scheduleDailySummary() {
     return summaryJob;
   } catch (error) {
     console.error('Error scheduling jobs:', error);
-    statusMonitor.recordError('scheduling', error.message);
+    StatusMonitor.recordError('scheduling', error.message);
     return null;
   }
 }
@@ -787,391 +835,8 @@ app.get('/test-multiple', async (req, res) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  // Collect system health information
-  const health = {
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    environment: {
-      isRailway: process.env.RAILWAY_ENVIRONMENT === 'true',
-      node: process.version
-    }
-  };
-  
-  // Format uptime
-  const uptime = process.uptime();
-  const days = Math.floor(uptime / 86400);
-  const hours = Math.floor((uptime % 86400) / 3600);
-  const minutes = Math.floor((uptime % 3600) / 60);
-  const seconds = Math.floor(uptime % 60);
-  const uptimeString = `${days}d ${hours}h ${minutes}m ${seconds}s`;
-  
-  // Format memory
-  const formatMemory = (bytes) => {
-    return (bytes / 1024 / 1024).toFixed(2) + ' MB';
-  };
-  
-  // Check if JSON response is requested
-  if (req.query.format === 'json') {
-    return res.status(200).json(health);
-  }
-  
-  // Render HTML response
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>System Health Dashboard</title>
-      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-      <style>
-        :root {
-          --primary: #4361ee;
-          --success: #2ecc71;
-          --warning: #f39c12;
-          --danger: #e74c3c;
-          --light: #f8f9fa;
-          --dark: #343a40;
-        }
-        
-        * {
-          box-sizing: border-box;
-          margin: 0;
-          padding: 0;
-        }
-        
-        body {
-          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-          line-height: 1.6;
-          color: var(--dark);
-          background-color: #f5f7fb;
-          padding: 0;
-          margin: 0;
-        }
-        
-        .container {
-          max-width: 1200px;
-          margin: 0 auto;
-          padding: 2rem;
-        }
-        
-        header {
-          background-color: white;
-          box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-          padding: 1.5rem 0;
-          margin-bottom: 2rem;
-        }
-        
-        .header-container {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          max-width: 1200px;
-          margin: 0 auto;
-          padding: 0 2rem;
-        }
-        
-        h1 {
-          font-size: 1.8rem;
-          color: var(--primary);
-          margin-bottom: 0.5rem;
-        }
-        
-        h2 {
-          font-size: 1.4rem;
-          margin-bottom: 1rem;
-          color: var(--dark);
-        }
-        
-        .status-badge {
-          display: inline-block;
-          padding: 0.4rem 1rem;
-          border-radius: 50px;
-          font-weight: 600;
-          font-size: 0.9rem;
-        }
-        
-        .status-badge.healthy {
-          background-color: rgba(46, 204, 113, 0.2);
-          color: var(--success);
-        }
-        
-        .status-badge.warning {
-          background-color: rgba(243, 156, 18, 0.2);
-          color: var(--warning);
-        }
-        
-        .status-badge.critical {
-          background-color: rgba(231, 76, 60, 0.2);
-          color: var(--danger);
-        }
-        
-        .panel {
-          background-color: white;
-          border-radius: 8px;
-          box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-          padding: 1.5rem;
-          margin-bottom: 1.5rem;
-        }
-        
-        .panel-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 1.2rem;
-          padding-bottom: 0.8rem;
-          border-bottom: 1px solid rgba(0,0,0,0.05);
-        }
-        
-        .panel-title {
-          font-size: 1.2rem;
-          font-weight: 600;
-          color: var(--primary);
-          display: flex;
-          align-items: center;
-        }
-        
-        .panel-title i {
-          margin-right: 0.5rem;
-        }
-        
-        .stats-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-          gap: 1.5rem;
-        }
-        
-        .stat-card {
-          background-color: #f8f9fa;
-          border-radius: 8px;
-          padding: 1.2rem;
-          transition: all 0.3s ease;
-        }
-        
-        .stat-card:hover {
-          transform: translateY(-5px);
-          box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-        }
-        
-        .stat-title {
-          font-size: 0.9rem;
-          color: #6c757d;
-          margin-bottom: 0.5rem;
-        }
-        
-        .stat-value {
-          font-size: 1.8rem;
-          font-weight: 700;
-          color: var(--primary);
-        }
-        
-        .stat-subtitle {
-          font-size: 0.85rem;
-          color: #6c757d;
-          margin-top: 0.5rem;
-        }
-        
-        .memory-bars {
-          margin-top: 1rem;
-        }
-        
-        .memory-bar {
-          margin-bottom: 1rem;
-        }
-        
-        .memory-bar-label {
-          display: flex;
-          justify-content: space-between;
-          margin-bottom: 0.3rem;
-          font-size: 0.9rem;
-        }
-        
-        .memory-bar-track {
-          height: 8px;
-          width: 100%;
-          background-color: rgba(67, 97, 238, 0.1);
-          border-radius: 4px;
-          overflow: hidden;
-        }
-        
-        .memory-bar-fill {
-          height: 100%;
-          background-color: var(--primary);
-          border-radius: 4px;
-        }
-        
-        .nav-links {
-          display: flex;
-          gap: 1.5rem;
-        }
-        
-        .nav-link {
-          color: var(--dark);
-          text-decoration: none;
-          font-weight: 500;
-          transition: color 0.2s;
-          display: flex;
-          align-items: center;
-        }
-        
-        .nav-link i {
-          margin-right: 0.5rem;
-        }
-        
-        .nav-link:hover {
-          color: var(--primary);
-        }
-        
-        .current-time {
-          font-size: 0.9rem;
-          color: #6c757d;
-          text-align: center;
-          margin-top: 2rem;
-        }
-        
-        .refresh-button {
-          background-color: var(--primary);
-          color: white;
-          border: none;
-          border-radius: 4px;
-          padding: 0.5rem 1rem;
-          font-size: 0.9rem;
-          cursor: pointer;
-          transition: background-color 0.2s;
-        }
-        
-        .refresh-button:hover {
-          background-color: #2c49c7;
-        }
-        
-        .api-link {
-          display: inline-block;
-          font-size: 0.85rem;
-          color: var(--primary);
-          text-decoration: none;
-          margin-top: 1rem;
-        }
-        
-        .api-link:hover {
-          text-decoration: underline;
-        }
-        
-        @media (max-width: 768px) {
-          .stats-grid {
-            grid-template-columns: 1fr;
-          }
-          
-          .header-container {
-            flex-direction: column;
-            text-align: center;
-          }
-          
-          .nav-links {
-            margin-top: 1rem;
-          }
-        }
-      </style>
-    </head>
-    <body>
-      <header>
-        <div class="header-container">
-          <div>
-            <h1>CGNSEAlert System Health</h1>
-            <span class="status-badge healthy">
-              <i class="fas fa-check-circle"></i> System Operational
-            </span>
-          </div>
-          <div class="nav-links">
-            <a href="/status" class="nav-link"><i class="fas fa-chart-line"></i> Dashboard</a>
-            <a href="/analytics" class="nav-link"><i class="fas fa-chart-pie"></i> Analytics</a>
-            <a href="/test-webhook-dashboard" class="nav-link"><i class="fas fa-paper-plane"></i> Test</a>
-          </div>
-        </div>
-      </header>
-      
-      <div class="container">
-        <div class="panel">
-          <div class="panel-header">
-            <div class="panel-title">
-              <i class="fas fa-server"></i> System Overview
-            </div>
-            <button class="refresh-button" onclick="window.location.reload()">
-              <i class="fas fa-sync-alt"></i> Refresh
-            </button>
-          </div>
-          
-          <div class="stats-grid">
-            <div class="stat-card">
-              <div class="stat-title">UPTIME</div>
-              <div class="stat-value">${uptimeString}</div>
-              <div class="stat-subtitle">Since ${new Date(Date.now() - (uptime * 1000)).toLocaleString()}</div>
-            </div>
-            
-            <div class="stat-card">
-              <div class="stat-title">ENVIRONMENT</div>
-              <div class="stat-value">${health.environment.isRailway ? 'Railway' : 'Local'}</div>
-              <div class="stat-subtitle">Node ${health.environment.node}</div>
-            </div>
-            
-            <div class="stat-card">
-              <div class="stat-title">STATUS</div>
-              <div class="stat-value" style="color: var(--success);">Healthy</div>
-              <div class="stat-subtitle">All systems operational</div>
-            </div>
-          </div>
-        </div>
-        
-        <div class="panel">
-          <div class="panel-header">
-            <div class="panel-title">
-              <i class="fas fa-memory"></i> Memory Usage
-            </div>
-          </div>
-          
-          <div class="memory-bars">
-            <div class="memory-bar">
-              <div class="memory-bar-label">
-                <span>Heap Used</span>
-                <span>${formatMemory(health.memory.heapUsed)}</span>
-              </div>
-              <div class="memory-bar-track">
-                <div class="memory-bar-fill" style="width: ${(health.memory.heapUsed / health.memory.heapTotal * 100).toFixed(1)}%"></div>
-              </div>
-            </div>
-            
-            <div class="memory-bar">
-              <div class="memory-bar-label">
-                <span>Heap Allocated</span>
-                <span>${formatMemory(health.memory.heapTotal)}</span>
-              </div>
-              <div class="memory-bar-track">
-                <div class="memory-bar-fill" style="width: 100%"></div>
-              </div>
-            </div>
-            
-            <div class="memory-bar">
-              <div class="memory-bar-label">
-                <span>RSS Memory</span>
-                <span>${formatMemory(health.memory.rss)}</span>
-              </div>
-              <div class="memory-bar-track">
-                <div class="memory-bar-fill" style="width: ${(health.memory.rss / (health.memory.heapTotal * 2) * 100).toFixed(1)}%"></div>
-              </div>
-            </div>
-          </div>
-        </div>
-        
-        <div class="current-time">
-          Last updated: ${new Date().toLocaleString()}
-        </div>
-        
-        <a href="/health?format=json" class="api-link">View JSON API response →</a>
-      </div>
-    </body>
-    </html>
-  `);
+  StatusMonitor.recordHealthCheck();
+  res.json(StatusMonitor.getStatus());
 });
 
 // Status API endpoint (JSON)
@@ -2101,131 +1766,58 @@ app.get('/MONGODB-CONNECTION-FIX.md', (req, res) => {
 });
 
 // Graceful shutdown handler
-const gracefulShutdown = () => {
-  console.log('Received shutdown signal');
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down...');
   
-  try {
-    // Only call statusMonitor.recordEvent if it exists
-    if (statusMonitor && typeof statusMonitor.recordEvent === 'function') {
-      statusMonitor.recordEvent('shutdown', 'Graceful shutdown initiated');
-    } else if (statusMonitor && typeof statusMonitor.recordError === 'function') {
-      // Fallback to recordError if recordEvent doesn't exist
-      statusMonitor.recordError('shutdown', 'Graceful shutdown initiated');
-    }
-  } catch (error) {
-    console.error('Error recording shutdown event:', error);
+  // Only call StatusMonitor.recordEvent if it exists
+  if (typeof StatusMonitor.recordEvent === 'function') {
+    StatusMonitor.recordEvent('shutdown', 'Graceful shutdown initiated');
+  } else if (typeof StatusMonitor.recordError === 'function') {
+    // Fallback to recordError if recordEvent doesn't exist
+    StatusMonitor.recordError('shutdown', 'Graceful shutdown initiated');
   }
   
-  // Set a flag to indicate planned shutdown - prevents duplicate notifications
-  global.isShuttingDown = true;
-  
-  // Check current IST time
-  const now = new Date();
-  const istOffset = 330; // IST is UTC+5:30 (330 minutes)
-  const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
-  const istMinutes = (utcMinutes + istOffset) % (24 * 60);
-  const istHour = Math.floor(istMinutes / 60);
-  const istMinute = istMinutes % 60;
-  const istDay = now.getUTCDay(); // 0 is Sunday, 1 is Monday, etc.
-  
-  // Check if it's around market close time (3:45-4:15 PM IST on weekdays)
-  const marketEndMinutes = 15 * 60 + 45; // 3:45 PM in minutes
-  const marketPostCloseMinutes = marketEndMinutes + 30; // 30 min buffer after market close
-  
-  const isAroundMarketClose = 
-    istDay >= 1 && istDay <= 5 && // Monday-Friday
-    istMinutes >= marketEndMinutes && 
-    istMinutes <= marketPostCloseMinutes;
-  
-  // Check if it's weekend
-  const isWeekend = istDay === 0 || istDay === 6; // Sunday or Saturday
-  
-  // Check if it's Friday after market close (special message)
-  const isFridayAfterClose = 
-    istDay === 5 && // Friday
-    istMinutes > marketEndMinutes;
-  
-  // Check if it's a stable runner market close (set by run-stable.js)
-  const isMarketClose = isAroundMarketClose || process.env.MARKET_CLOSE_SHUTDOWN === 'true';
-  
-  // Don't send notification if on Railway or if it's a market close shutdown
-  const isRailway = process.env.RAILWAY_ENVIRONMENT !== undefined;
-  
-  try {
-    // Only send notification if this is NOT a market close shutdown or error restart
-    if (!telegramError && !global.shuttingDownForError && !isMarketClose && !isRailway) {
-      sendTelegramMessage('⚠️ Stock Alerts Service is shutting down for maintenance. Will be back shortly!')
-        .then(() => {
-          server.close(() => {
-            console.log('Server closed');
-            process.exit(0);
-          });
-        })
-        .catch(() => {
-          server.close(() => {
-            console.log('Server closed');
-            process.exit(0);
-          });
-        });
-    } else {
-      // If it's due to market close, send special message
-      if (!telegramError && isMarketClose && !isRailway) {
-        // Select the appropriate message based on day of week
-        let shutdownMessage = '📈 Stock Alerts Service shutting down after market close. Will restart tomorrow before market open.';
-        
-        if (isFridayAfterClose) {
-          shutdownMessage = '📈 Stock Alerts Service shutting down for the weekend. Will restart on Monday before market open.';
-        } else if (isWeekend) {
-          shutdownMessage = '📈 Stock Alerts Service is in weekend mode. Will restart on next trading day.';
-        }
-        
-        sendTelegramMessage(shutdownMessage)
-          .then(() => {
-            server.close(() => {
-              console.log('Server closed after market hours');
-              process.exit(0);
-            });
-          })
-          .catch(() => {
-            server.close(() => {
-              console.log('Server closed after market hours');
-              process.exit(0);
-            });
-          });
-      } else {
-        server.close(() => {
-          console.log('Server closed');
-          process.exit(0);
-        });
-      }
-    }
-
-    // Force close after 10 seconds
-    setTimeout(() => {
-      console.error('Could not close connections in time, forcefully shutting down');
-      process.exit(1);
-    }, 10000);
-  } catch (error) {
-    console.error('Error during shutdown:', error);
-    process.exit(1);
-  }
-};
+  // Wait briefly for status to be saved
+  setTimeout(() => {
+    server.close(() => {
+      console.log('Server closed');
+      process.exit(0);
+    });
+  }, 500);
+});
 
 // Set up signal handlers
-process.on('SIGTERM', gracefulShutdown);
-process.on('SIGINT', gracefulShutdown);
+process.on('SIGINT', () => {
+  console.log('SIGINT received, shutting down...');
+  
+  // Only call StatusMonitor.recordEvent if it exists
+  if (typeof StatusMonitor.recordEvent === 'function') {
+    StatusMonitor.recordEvent('shutdown', 'Graceful shutdown initiated');
+  } else if (typeof StatusMonitor.recordError === 'function') {
+    // Fallback to recordError if recordEvent doesn't exist
+    StatusMonitor.recordError('shutdown', 'Graceful shutdown initiated');
+  }
+  
+  // Wait briefly for status to be saved
+  setTimeout(() => {
+    server.close(() => {
+      console.log('Server closed');
+      process.exit(0);
+    });
+  }, 500);
+});
 
 // Add these global error handlers before app.listen
 process.on('uncaughtException', (error) => {
-  console.error('UNCAUGHT EXCEPTION:', error);
-  statusMonitor.recordError('uncaughtException', error.message);
-  // Don't exit the process, just log the error
+  console.error('Uncaught Exception:', error);
+  StatusMonitor.recordError('uncaughtException', error.message);
+  // Continue running - don't crash
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('UNHANDLED REJECTION:', reason);
-  statusMonitor.recordError('unhandledRejection', reason);
-  // Don't exit the process, just log the error
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  StatusMonitor.recordError('unhandledRejection', reason);
+  // Continue running - don't crash
 });
 
 // Start the server
@@ -2273,7 +1865,7 @@ const server = app.listen(PORT, async () => {
     console.log('WARNING: Telegram connection failed, but webhook server is still running.');
     console.log('Alerts will be processed but not sent to Telegram until the connection issue is resolved.');
   }
-});
+}); 
 
 // Add handler for test-webhook-dashboard route
 app.get('/test-webhook-dashboard', (req, res) => {
