@@ -2588,8 +2588,11 @@ app.get('/test-webhook-dashboard', (req, res) => {
 // Add handler for viewing all alerts
 app.get('/alerts', async (req, res) => {
   try {
+    // Get database instance
+    const db = new Database();
+    
     // Connect to database
-    await database.connect();
+    await db.connect();
     
     // Get alerts from database (most recent first)
     const today = new Date();
@@ -2600,8 +2603,8 @@ app.get('/alerts', async (req, res) => {
     
     let alerts = [];
     
-    if (database.isConnected) {
-      alerts = await database.getAlertsAfterDate(startDate);
+    if (db.isConnected) {
+      alerts = await db.getAlertsAfterDate(startDate);
     } else {
       // If database not connected, use alerts from status monitor
       alerts = statusMonitor.getStatus().alerts.recent || [];
