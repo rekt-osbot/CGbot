@@ -3,11 +3,11 @@ const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const schedule = require('node-schedule');
-const StockDataService = require('./stockData');
+const stockData = require('./stockData-enhanced.js');
 const StockSummary = require('./stockSummary');
 const path = require('path');
 const fs = require('fs');
-const StatusMonitor = require('./status');
+const statusMonitor = require('./status');
 const Analytics = require('./analytics');
 const Database = require('./database');
 
@@ -315,14 +315,14 @@ async function testTelegramConnection() {
 // Process a single stock alert
 async function processSingleStock(symbol, scanName) {
   // Get current stock information
-  const stockInfo = await StockDataService.getCurrentStockInfo(symbol);
+  const stockInfo = await stockData.getCurrentStockInfo(symbol);
   if (!stockInfo) {
     console.error(`Failed to get stock information for ${symbol}`);
     return null;
   }
   
   // Get 20-day SMA for this stock
-  const sma20 = await StockDataService.get20DaySMA(symbol);
+  const sma20 = await stockData.get20DaySMA(symbol);
   console.log(`${symbol} - Open: ${stockInfo.open}, Low: ${stockInfo.low}, Close: ${stockInfo.close}, SMA20: ${sma20}`);
   
   // Determine scan type based on scan_name or conditions
@@ -372,47 +372,61 @@ async function processSingleStock(symbol, scanName) {
   return enrichedData;
 }
 
+/**
+ * Handle Chartink webhook data
+ * @param {Object} data - Webhook data from Chartink
+ * @returns {Object} - Normalized data for processing
+ */
+function processChartinkWebhook(data) {
+  // Normalize the stock data to make sure it has both symbol and scan_name
+  let normalizedData = { ...data };
+  
+  // Handle symbol field variants
+  normalizedData.symbol = normalizedData.symbol || normalizedData.ticker || normalizedData.stocks;
+  
+  // For Chartink data that doesn't include the .NS suffix
+  // The stockData-enhanced service will add it when needed
+  
+  // Make sure scan_name is set
+  normalizedData.scan_name = normalizedData.scan_name || normalizedData.scanName || 'Chartink Alert';
+  
+  // Add timestamp if missing
+  if (!normalizedData.triggered_at) {
+    normalizedData.triggered_at = new Date().toLocaleString();
+  }
+  
+  return normalizedData;
+}
+
 // Process incoming webhooks
 app.post('/webhook', async (req, res) => {
+  console.log('Received webhook:', req.body);
+  
   try {
-    console.log('Webhook received:', JSON.stringify(req.body));
-    
     // Record webhook reception in status monitor
-    StatusMonitor.recordWebhook();
+    statusMonitor.recordWebhook();
     
+    let stocksData = [];
     const data = req.body;
     
-    // Check for required fields
-    if (!data) {
-      throw new Error('No data received in webhook');
-    }
-    
-    // For backward compatibility, handle both single stock and array of stocks
-    let stocksData = [];
-    
-    if (data.stocks) {
-      if (Array.isArray(data.stocks)) {
-        // Format with 'stocks' field containing array
-        stocksData = data.stocks;
-        console.log(`Processing ${stocksData.length} stocks from webhook array`);
-      } else if (typeof data.stocks === 'string') {
-        // Format with 'stocks' field containing a single stock symbol as string
-        stocksData = [{
-          symbol: data.stocks,
-          trigger_price: data.trigger_prices,
-          triggered_at: data.triggered_at,
-          scan_name: data.scan_name,
-          scan_url: data.scan_url,
-          alert_name: data.alert_name
-        }];
-        console.log('Processing single stock from webhook stocks string');
-      }
+    // Process the webhook data based on its format
+    if (data.stocks && Array.isArray(data.stocks)) {
+      // Multiple stocks in array format
+      stocksData = data.stocks.map(stock => processChartinkWebhook(stock));
+    } else if (data.stocks && typeof data.stocks === 'string') {
+      // Format with 'stocks' field containing a single stock symbol as string
+      stocksData = [{
+        symbol: data.stocks,
+        scan_name: data.scan_name || 'Stock Alert',
+        triggered_at: data.triggered_at || new Date().toLocaleString()
+      }];
     } else if (data.symbol || data.ticker) {
-      // Legacy format with a single stock in the main object
-      stocksData = [data];
-      console.log('Processing single stock from webhook');
+      // Single stock format
+      stocksData = [processChartinkWebhook(data)];
     } else {
-      throw new Error('No valid stock data found in webhook payload');
+      // Unknown format
+      console.error('Unknown webhook format:', data);
+      return res.status(400).json({ error: 'Invalid webhook format' });
     }
     
     // Check if we have any valid data
@@ -438,7 +452,7 @@ app.post('/webhook', async (req, res) => {
       console.log(`Stored ${stocksData.length} alerts in database`);
     } catch (dbError) {
       console.error('Database error while storing alerts:', dbError);
-      StatusMonitor.recordError('database', dbError);
+      statusMonitor.recordError('database', dbError);
       // Continue processing even if database fails
     }
     
@@ -528,7 +542,7 @@ app.post('/webhook', async (req, res) => {
     });
   } catch (error) {
     console.error('Error processing webhook:', error);
-    StatusMonitor.recordError('webhook', error);
+    statusMonitor.recordError('webhook', error);
     
     res.status(400).json({
       success: false,
@@ -544,13 +558,13 @@ app.get('/check/:symbol', async (req, res) => {
     const symbol = req.symbol ? req.symbol : req.params.symbol;
     
     // Get current stock information
-    const stockInfo = await StockDataService.getCurrentStockInfo(symbol);
+    const stockInfo = await stockData.getCurrentStockInfo(symbol);
     if (!stockInfo) {
       return res.status(500).json({ error: 'Failed to get stock information' });
     }
     
     // Get 20-day SMA
-    const sma20 = await StockDataService.get20DaySMA(symbol);
+    const sma20 = await stockData.get20DaySMA(symbol);
     
     // Calculate stop loss
     const stopLoss = calculateStopLoss(stockInfo.low, sma20);
@@ -622,7 +636,7 @@ async function generateAndSendDailySummary() {
     }
   } catch (error) {
     console.error('Error generating daily summary:', error);
-    StatusMonitor.recordError('Daily summary generation', error);
+    statusMonitor.recordError('Daily summary generation', error);
     return false;
   }
 }
@@ -645,7 +659,7 @@ app.get('/daily-summary', async (req, res) => {
     }
   } catch (error) {
     console.error('Error generating daily summary:', error);
-    StatusMonitor.recordError('Manual daily summary', error);
+    statusMonitor.recordError('Manual daily summary', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -669,7 +683,7 @@ function scheduleDailySummary() {
         fs.writeFileSync(lockFilePath, new Date().toISOString());
         
         console.log('Running daily summary job');
-        StatusMonitor.recordEvent('scheduledTask', 'Daily summary started');
+        statusMonitor.recordEvent('scheduledTask', 'Daily summary started');
         
         await generateAndSendDailySummary();
         
@@ -679,7 +693,7 @@ function scheduleDailySummary() {
         }
       } catch (error) {
         console.error('Error in scheduled summary job:', error);
-        StatusMonitor.recordError('dailySummaryJob', error.message);
+        statusMonitor.recordError('dailySummaryJob', error.message);
         
         // Remove lockfile on error too
         if (fs.existsSync(lockFilePath)) {
@@ -692,7 +706,7 @@ function scheduleDailySummary() {
     return summaryJob;
   } catch (error) {
     console.error('Error scheduling jobs:', error);
-    StatusMonitor.recordError('scheduling', error.message);
+    statusMonitor.recordError('scheduling', error.message);
     return null;
   }
 }
@@ -1153,8 +1167,8 @@ app.get('/health', (req, res) => {
 
 // Status API endpoint (JSON)
 app.get('/api/status', (req, res) => {
-  StatusMonitor.recordHealthCheck();
-  res.json(StatusMonitor.getStatus());
+  statusMonitor.recordHealthCheck();
+  res.json(statusMonitor.getStatus());
 });
 
 // Analytics API endpoint (JSON)
@@ -1186,7 +1200,7 @@ app.get('/status', async (req, res) => {
     let todayWebhooks = 0;
     let lastAlert = null;
     let totalAlerts = 0;
-    let totalWebhooks = StatusMonitor.getTotalWebhooks() || 0;
+    let totalWebhooks = statusMonitor.getTotalWebhooks() || 0;
     let dbError = null;
     
     try {
@@ -1208,17 +1222,17 @@ app.get('/status', async (req, res) => {
     } catch (error) {
       console.error('Error retrieving database metrics:', error);
       dbError = error.message;
-      StatusMonitor.recordError('database', error);
+      statusMonitor.recordError('database', error);
     }
     
     // Calculate stats
     const todayAlertCount = todayAlerts ? todayAlerts.length : 0;
     
     // Get today's webhook count and total count from StatusMonitor
-    todayWebhooks = StatusMonitor.getTodayWebhooks() || 0;
+    todayWebhooks = statusMonitor.getTodayWebhooks() || 0;
     
     // Get recent errors
-    const recentErrors = StatusMonitor.getRecentErrors();
+    const recentErrors = statusMonitor.getRecentErrors();
     let errorLog = '';
     
     if (recentErrors && recentErrors.length > 0) {
@@ -2245,7 +2259,7 @@ app.get('/resend-alerts', async (req, res) => {
     } catch (error) {
       console.error('Error retrieving alerts from database:', error);
       dbError = error.message || 'Database connection error';
-      StatusMonitor.recordError('database', error);
+      statusMonitor.recordError('database', error);
     }
     
     // Prepare HTML content
@@ -2610,12 +2624,12 @@ const gracefulShutdown = () => {
   console.log('Received shutdown signal');
   
   try {
-    // Only call StatusMonitor.recordEvent if it exists
-    if (StatusMonitor && typeof StatusMonitor.recordEvent === 'function') {
-      StatusMonitor.recordEvent('shutdown', 'Graceful shutdown initiated');
-    } else if (StatusMonitor && typeof StatusMonitor.recordError === 'function') {
+    // Only call statusMonitor.recordEvent if it exists
+    if (statusMonitor && typeof statusMonitor.recordEvent === 'function') {
+      statusMonitor.recordEvent('shutdown', 'Graceful shutdown initiated');
+    } else if (statusMonitor && typeof statusMonitor.recordError === 'function') {
       // Fallback to recordError if recordEvent doesn't exist
-      StatusMonitor.recordError('shutdown', 'Graceful shutdown initiated');
+      statusMonitor.recordError('shutdown', 'Graceful shutdown initiated');
     }
   } catch (error) {
     console.error('Error recording shutdown event:', error);
@@ -2723,13 +2737,13 @@ process.on('SIGINT', gracefulShutdown);
 // Add these global error handlers before app.listen
 process.on('uncaughtException', (error) => {
   console.error('UNCAUGHT EXCEPTION:', error);
-  StatusMonitor.recordError('uncaughtException', error.message);
+  statusMonitor.recordError('uncaughtException', error.message);
   // Don't exit the process, just log the error
 });
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('UNHANDLED REJECTION:', reason);
-  StatusMonitor.recordError('unhandledRejection', reason);
+  statusMonitor.recordError('unhandledRejection', reason);
   // Don't exit the process, just log the error
 });
 

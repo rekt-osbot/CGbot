@@ -7,7 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 const Handlebars = require('handlebars');
-const StatusMonitor = require('./status');
+const statusMonitor = require('./status');
 const Database = require('./database');
 const Analytics = require('./analytics');
 
@@ -38,7 +38,7 @@ function timeAgo(timestamp) {
 function enhancedDashboard(req, res) {
   try {
     // Get system status
-    const status = StatusMonitor.getStatus();
+    const status = statusMonitor.getStatus();
     
     // Check database connection
     const database = new Database();
@@ -130,7 +130,7 @@ function enhancedDashboard(req, res) {
 function apiStatus(req, res) {
   try {
     // Get system status
-    const status = StatusMonitor.getStatus();
+    const status = statusMonitor.getStatus();
     
     // Add additional data for API
     status.api = {

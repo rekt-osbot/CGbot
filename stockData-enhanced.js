@@ -189,12 +189,16 @@ class EnhancedStockDataService {
    * @returns {string} - Formatted symbol
    */
   formatSymbol(symbol) {
+    // If it's null/undefined/empty, return as is
+    if (!symbol) return symbol;
+    
     // If the symbol already has an exchange suffix, return as is
     if (symbol.includes('.')) {
       return symbol;
     }
     
     // For Indian stocks, add .NS (NSE) suffix
+    // This will handle Chartink webhooks which don't append the exchange suffix
     return `${symbol}.NS`;
   }
   
