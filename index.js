@@ -401,7 +401,7 @@ function processChartinkWebhook(data) {
 
 // Process incoming webhooks
 app.post('/webhook', async (req, res) => {
-  console.log('Received webhook:', req.body);
+  console.log('Received webhook:', JSON.stringify(req.body, null, 2));
   
   try {
     // Record webhook reception in status monitor
@@ -410,12 +410,16 @@ app.post('/webhook', async (req, res) => {
     let stocksData = [];
     const data = req.body;
     
+    console.log('Processing webhook data format...');
+    
     // Process the webhook data based on its format
     if (data.stocks && Array.isArray(data.stocks)) {
       // Multiple stocks in array format
+      console.log('Detected multiple stocks array format');
       stocksData = data.stocks.map(stock => processChartinkWebhook(stock));
     } else if (data.stocks && typeof data.stocks === 'string') {
       // Format with 'stocks' field containing a single stock symbol as string
+      console.log('Detected single stock string format');
       stocksData = [{
         symbol: data.stocks,
         scan_name: data.scan_name || 'Stock Alert',
@@ -423,6 +427,7 @@ app.post('/webhook', async (req, res) => {
       }];
     } else if (data.symbol || data.ticker) {
       // Single stock format
+      console.log('Detected single stock object format');
       stocksData = [processChartinkWebhook(data)];
     } else {
       // Unknown format
@@ -435,6 +440,8 @@ app.post('/webhook', async (req, res) => {
       throw new Error('No stocks to process');
     }
     
+    console.log(`Processing ${stocksData.length} stocks:`, JSON.stringify(stocksData, null, 2));
+    
     // Normalize scan name field 
     const scanName = data.scan_name || 
                     (data.scanName) || 
@@ -443,6 +450,7 @@ app.post('/webhook', async (req, res) => {
                     
     // Store data in database
     try {
+      console.log('Attempting to store in database...');
       for (const stock of stocksData) {
         // Normalize the stock data to make sure it has both symbol and scan_name
         stock.symbol = stock.symbol || stock.ticker;
@@ -2588,11 +2596,9 @@ app.get('/test-webhook-dashboard', (req, res) => {
 // Add handler for viewing all alerts
 app.get('/alerts', async (req, res) => {
   try {
-    // Get database instance
-    const db = new Database();
-    
+    // Database is a singleton instance, not a constructor
     // Connect to database
-    await db.connect();
+    await Database.connect();
     
     // Get alerts from database (most recent first)
     const today = new Date();
@@ -2603,8 +2609,8 @@ app.get('/alerts', async (req, res) => {
     
     let alerts = [];
     
-    if (db.isConnected) {
-      alerts = await db.getAlertsAfterDate(startDate);
+    if (Database.isConnected) {
+      alerts = await Database.getAlertsAfterDate(startDate);
     } else {
       // If database not connected, use alerts from status monitor
       alerts = statusMonitor.getStatus().alerts.recent || [];
