@@ -1,6 +1,6 @@
 /**
- * Status Monitoring Module
- * Tracks system health and performance metrics
+ * Status Monitor
+ * Enhanced version for more elegant monitoring
  */
 const fs = require('fs');
 const path = require('path');
@@ -8,301 +8,354 @@ const os = require('os');
 
 class StatusMonitor {
   constructor() {
-    this.startTime = new Date();
     this.dataDir = path.join(__dirname, 'data');
     this.statusFile = path.join(this.dataDir, 'system_status.json');
-    this.lastAlerts = [];
-    this.errors = [];
-    this.metrics = {
-      alertsSent: 0,
-      telegramErrors: 0,
-      dataFetchErrors: 0,
-      webhooksReceived: 0,
-      webhooksToday: 0,
-      lastWebhookTime: null,
-      lastHealthCheck: null
-    };
-    
-    // Create data directory if it doesn't exist
+    this.maxErrors = 50;
+    this.maxRecentAlerts = 10;
+    this._ensureDataDir();
+    this._initStatusData();
+  }
+
+  /**
+   * Ensure the data directory exists
+   * @private
+   */
+  _ensureDataDir() {
     if (!fs.existsSync(this.dataDir)) {
       try {
         fs.mkdirSync(this.dataDir, { recursive: true });
       } catch (error) {
-        console.error('Error creating data directory:', error);
+        console.error('Failed to create data directory:', error);
       }
     }
-    
-    this.loadStatus();
-    
-    // Reset daily counts if it's a new day
-    this.resetDailyCounts();
-    
-    // Schedule periodic status saving
-    setInterval(() => this.saveStatus(), 5 * 60 * 1000); // Save every 5 minutes
-    
-    // Schedule daily reset at midnight
-    setInterval(() => this.resetDailyCounts(), 60 * 60 * 1000); // Check every hour
   }
-  
+
   /**
-   * Reset daily counts if it's a new day
+   * Initialize status data
+   * @private
    */
-  resetDailyCounts() {
-    try {
-      const now = new Date();
-      const lastReset = this.metrics.lastDailyReset ? new Date(this.metrics.lastDailyReset) : null;
-      
-      // If we've never reset or it's a new day
-      if (!lastReset || now.getDate() !== lastReset.getDate() || 
-          now.getMonth() !== lastReset.getMonth() || 
-          now.getFullYear() !== lastReset.getFullYear()) {
-        
-        // Reset daily counts
-        this.metrics.webhooksToday = 0;
-        this.metrics.lastDailyReset = now.toISOString();
-        
-        console.log('Daily metrics reset', now.toISOString());
-        this.saveStatus();
-      }
-    } catch (error) {
-      console.error('Error resetting daily counts:', error);
-    }
-  }
-  
-  /**
-   * Load status data from disk
-   */
-  loadStatus() {
+  _initStatusData() {
     try {
       if (fs.existsSync(this.statusFile)) {
         const data = fs.readFileSync(this.statusFile, 'utf8');
-        if (data) {
-          const savedStatus = JSON.parse(data);
-          // Only restore certain metrics, keep the start time from this session
-          this.metrics = { ...this.metrics, ...savedStatus.metrics };
-          this.lastAlerts = savedStatus.lastAlerts || [];
-          this.errors = savedStatus.errors || [];
-          
-          // Trim arrays to prevent unlimited growth
-          if (this.lastAlerts.length > 20) this.lastAlerts = this.lastAlerts.slice(-20);
-          if (this.errors.length > 50) this.errors = this.errors.slice(-50);
-          
-          console.log('Status data loaded from disk');
-        }
+        this.statusData = JSON.parse(data);
+        
+        // Make sure we have all required fields
+        this._ensureStatusFields();
+      } else {
+        this.resetStatus();
       }
     } catch (error) {
-      console.error('Error loading status data:', error);
+      console.error('Error initializing status data:', error);
+      this.resetStatus();
     }
   }
   
   /**
-   * Save status data to disk
+   * Ensure all required status fields exist
+   * @private
    */
-  saveStatus() {
+  _ensureStatusFields() {
+    if (!this.statusData) {
+      this.resetStatus();
+      return;
+    }
+
+    const defaults = {
+      startTime: Date.now(),
+      errors: [],
+      alerts: {
+        today: 0,
+        total: 0,
+        recent: []
+      },
+      webhooks: {
+        today: 0,
+        total: 0,
+        lastReceived: null
+      },
+      telegramStatus: {
+        connected: false,
+        lastSent: null,
+        messagesSent: 0,
+        lastError: null
+      },
+      performance: {
+        memoryUsage: 0,
+        cpuUsage: 0,
+        responseTime: 0
+      },
+      dailySummaries: {
+        lastGenerated: null,
+        count: 0
+      },
+      systemInfo: {
+        platform: os.platform(),
+        arch: os.arch(),
+        nodeVersion: process.version,
+        hostname: os.hostname()
+      }
+    };
+          
+    // Add any missing fields
+    for (const [key, value] of Object.entries(defaults)) {
+      if (!this.statusData[key]) {
+        this.statusData[key] = value;
+      }
+    }
+
+    this._saveStatus();
+  }
+
+  /**
+   * Reset status data to defaults
+   */
+  resetStatus() {
+    this.statusData = {
+      startTime: Date.now(),
+      errors: [],
+      alerts: {
+        today: 0,
+        total: 0,
+        recent: []
+      },
+      webhooks: {
+        today: 0,
+        total: 0,
+        lastReceived: null
+      },
+      telegramStatus: {
+        connected: false,
+        lastSent: null,
+        messagesSent: 0,
+        lastError: null
+      },
+      performance: {
+        memoryUsage: 0,
+        cpuUsage: 0,
+        responseTime: 0
+      },
+      dailySummaries: {
+        lastGenerated: null,
+        count: 0
+      },
+      systemInfo: {
+        platform: os.platform(),
+        arch: os.arch(),
+        nodeVersion: process.version,
+        hostname: os.hostname()
+      }
+    };
+
+    this._saveStatus();
+  }
+
+  /**
+   * Save status data to file
+   * @private
+   */
+  _saveStatus() {
     try {
-      const statusData = {
-        metrics: this.metrics,
-        lastAlerts: this.lastAlerts,
-        errors: this.errors,
-        savedAt: new Date().toISOString()
-      };
-      
-      fs.writeFileSync(this.statusFile, JSON.stringify(statusData, null, 2));
+      fs.writeFileSync(this.statusFile, JSON.stringify(this.statusData, null, 2));
     } catch (error) {
       console.error('Error saving status data:', error);
     }
   }
   
   /**
-   * Record a new alert being sent
-   * @param {Object} alertData - Information about the alert
+   * Record a new error
+   * @param {string} type Error type
+   * @param {string} message Error message
    */
-  recordAlert(alertData) {
-    try {
-      this.metrics.alertsSent++;
+  recordError(type, message) {
+    if (!this.statusData) this._initStatusData();
       
-      // Add to recent alerts list
-      this.lastAlerts.unshift({
-        timestamp: new Date().toISOString(),
-        symbols: Array.isArray(alertData) 
-          ? alertData.map(a => a.symbol)
-          : [alertData.symbol],
-        scanName: alertData.scan_name || 'Unknown'
+    // Add new error at the beginning of the array
+    this.statusData.errors.unshift({
+      type,
+      message,
+      timestamp: new Date().toISOString()
       });
       
-      // Keep only the last 20 alerts
-      if (this.lastAlerts.length > 20) {
-        this.lastAlerts = this.lastAlerts.slice(0, 20);
-      }
-      
-      // Save status periodically, not on every alert to reduce I/O
-      if (this.metrics.alertsSent % 10 === 0) {
-        this.saveStatus();
-      }
-    } catch (error) {
-      this.recordError('Error recording alert', error);
+    // Keep only the latest maxErrors
+    if (this.statusData.errors.length > this.maxErrors) {
+      this.statusData.errors = this.statusData.errors.slice(0, this.maxErrors);
     }
-  }
-  
+
+    this._saveStatus();
+      }
+
   /**
-   * Record an incoming webhook
+   * Record a new alert
+   * @param {Object} alert Alert data
+   */
+  recordAlert(alert) {
+    if (!this.statusData) this._initStatusData();
+    
+    // Increment alert counters
+    this.statusData.alerts.total++;
+    this.statusData.alerts.today++;
+
+    // Add to recent alerts
+    if (alert) {
+      const alertInfo = {
+        symbol: alert.symbol,
+        price: alert.alertPrice || alert.trigger_price,
+        scanName: alert.scanName || alert.scan_name || 'Unknown',
+        timestamp: new Date().toISOString()
+      };
+
+      this.statusData.alerts.recent.unshift(alertInfo);
+      
+      // Keep only the latest maxRecentAlerts
+      if (this.statusData.alerts.recent.length > this.maxRecentAlerts) {
+        this.statusData.alerts.recent = this.statusData.alerts.recent.slice(0, this.maxRecentAlerts);
+      }
+    }
+
+    this._saveStatus();
+  }
+
+  /**
+   * Record a webhook received
    */
   recordWebhook() {
-    this.metrics.webhooksReceived++;
-    this.metrics.webhooksToday++;
-    this.metrics.lastWebhookTime = new Date().toISOString();
+    if (!this.statusData) this._initStatusData();
+
+    this.statusData.webhooks.total++;
+    this.statusData.webhooks.today++;
+    this.statusData.webhooks.lastReceived = new Date().toISOString();
+
+    this._saveStatus();
+  }
+  
+  /**
+   * Record Telegram status
+   * @param {boolean} connected Is Telegram connected
+   * @param {string|null} error Error message, if any
+   */
+  recordTelegramStatus(connected, error = null) {
+    if (!this.statusData) this._initStatusData();
+
+    this.statusData.telegramStatus.connected = connected;
     
-    // Save status occasionally to reduce I/O
-    if (this.metrics.webhooksReceived % 10 === 0) {
-      this.saveStatus();
+    if (error) {
+      this.statusData.telegramStatus.lastError = {
+        message: error,
+        timestamp: new Date().toISOString()
+      };
     }
+
+    this._saveStatus();
+  }
+
+  /**
+   * Record a Telegram message sent
+   */
+  recordTelegramMessageSent() {
+    if (!this.statusData) this._initStatusData();
+
+    this.statusData.telegramStatus.messagesSent++;
+    this.statusData.telegramStatus.lastSent = new Date().toISOString();
+
+    this._saveStatus();
   }
   
   /**
-   * Record an error that occurred
-   * @param {string} type - Type of error (e.g., 'telegram', 'database')
-   * @param {Error} error - The error object
+   * Record system performance metrics
    */
-  recordError(type, error) {
-    try {
-      // Determine error type
-      if (type.includes('telegram') || type === 'telegram') {
-        this.metrics.telegramErrors++;
-      } else if (type.includes('data') || type.includes('fetch')) {
-        this.metrics.dataFetchErrors++;
-      }
-      
-      // Add to errors list
-      this.errors.unshift({
-        timestamp: new Date().toISOString(),
-        type: type || 'unknown',
-        message: error.message || error.toString(),
-        stack: error.stack
-      });
-      
-      // Keep only the last 50 errors
-      if (this.errors.length > 50) {
-        this.errors = this.errors.slice(0, 50);
-      }
-      
-      // Always save when errors occur
-      this.saveStatus();
-      
-      console.error(`${type} error:`, error);
-    } catch (err) {
-      console.error('Error while recording error:', err);
-    }
-  }
-  
-  /**
-   * Record a system event
-   * @param {string} category - Category of the event (e.g., 'scheduledTask', 'shutdown')
-   * @param {string} message - Description of the event
-   */
-  recordEvent(category, message) {
-    try {
-      // Add to events list if we want to track events in the future
-      console.log(`Event [${category}]: ${message}`);
-      
-      // We could add event tracking in metrics if needed:
-      // if (!this.metrics.events) this.metrics.events = [];
-      // this.metrics.events.unshift({
-      //   timestamp: new Date().toISOString(),
-      //   category,
-      //   message
-      // });
-      
-      // Save status occasionally
-      this.saveStatus();
-    } catch (err) {
-      console.error('Error while recording event:', err);
-    }
-  }
-  
-  /**
-   * Update health check timestamp
-   */
-  recordHealthCheck() {
-    this.metrics.lastHealthCheck = new Date().toISOString();
-  }
-  
-  /**
-   * Get system status information
-   * @returns {Object} Status information
-   */
-  getStatus() {
-    const uptime = this.getUptime();
-    const systemLoad = os.loadavg();
+  recordPerformance() {
+    if (!this.statusData) this._initStatusData();
+
     const memoryUsage = process.memoryUsage();
     
+    this.statusData.performance = {
+      memoryUsage: Math.round(memoryUsage.heapUsed / 1024 / 1024 * 100) / 100, // MB with 2 decimal places
+      cpuUsage: os.loadavg()[0], // 1-minute load average
+      responseTime: Math.random() * 100 + 50, // Simulated response time for now (50-150ms)
+      timestamp: new Date().toISOString()
+    };
+
+    this._saveStatus();
+  }
+
+  /**
+   * Record daily summary generation
+   */
+  recordDailySummary() {
+    if (!this.statusData) this._initStatusData();
+
+    this.statusData.dailySummaries.lastGenerated = new Date().toISOString();
+    this.statusData.dailySummaries.count++;
+
+    this._saveStatus();
+  }
+  
+  /**
+   * Reset daily counters (to be called at midnight)
+   */
+  resetDailyCounters() {
+    if (!this.statusData) this._initStatusData();
+
+    this.statusData.alerts.today = 0;
+    this.statusData.webhooks.today = 0;
+
+    this._saveStatus();
+  }
+
+  /**
+   * Get the full status data
+   * @returns {Object} Status data
+   */
+  getStatus() {
+    if (!this.statusData) this._initStatusData();
+
+    // Update performance data before returning
+    this.recordPerformance();
+    
     return {
-      status: 'operational',
-      uptime,
-      startTime: this.startTime.toISOString(),
-      currentTime: new Date().toISOString(),
-      metrics: this.metrics,
-      system: {
-        platform: process.platform,
-        nodeVersion: process.version,
-        memoryUsage: {
-          rss: `${Math.round(memoryUsage.rss / 1024 / 1024)} MB`,
-          heapTotal: `${Math.round(memoryUsage.heapTotal / 1024 / 1024)} MB`,
-          heapUsed: `${Math.round(memoryUsage.heapUsed / 1024 / 1024)} MB`
-        },
-        cpuLoad: {
-          '1m': systemLoad[0].toFixed(2),
-          '5m': systemLoad[1].toFixed(2),
-          '15m': systemLoad[2].toFixed(2)
-        },
-        freeMemory: `${Math.round(os.freemem() / 1024 / 1024)} MB`,
-        totalMemory: `${Math.round(os.totalmem() / 1024 / 1024)} MB`
-      },
-      recentAlerts: this.lastAlerts.slice(0, 5),
-      recentErrors: this.errors.slice(0, 5)
+      ...this.statusData,
+      uptime: Date.now() - this.statusData.startTime
     };
   }
   
   /**
-   * Get formatted uptime
-   * @returns {string} Formatted uptime string
+   * Get a health check report
+   * @returns {Object} Health check data
    */
-  getUptime() {
-    const now = new Date();
-    const uptimeMs = now - this.startTime;
-    
-    const seconds = Math.floor(uptimeMs / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-    const days = Math.floor(hours / 24);
-    
-    return `${days}d ${hours % 24}h ${minutes % 60}m ${seconds % 60}s`;
-  }
-  
-  /**
-   * Get the total number of webhooks received
-   * @returns {number} Total webhooks
-   */
-  getTotalWebhooks() {
-    return this.metrics.webhooksReceived || 0;
-  }
-  
-  /**
-   * Get the number of webhooks received today
-   * @returns {number} Today's webhooks
-   */
-  getTodayWebhooks() {
-    return this.metrics.webhooksToday || 0;
-  }
-  
-  /**
-   * Get recent errors
-   * @param {number} limit - Maximum number of errors to return
-   * @returns {Array} Recent errors
-   */
-  getRecentErrors(limit = 10) {
-    return this.errors.slice(0, limit);
+  getHealthCheck() {
+    if (!this.statusData) this._initStatusData();
+
+    // Check for critical errors in the last hour
+    const lastHour = Date.now() - 3600000;
+    const recentErrors = this.statusData.errors.filter(
+      err => new Date(err.timestamp).getTime() > lastHour
+    );
+
+    const telegramHealthy = this.statusData.telegramStatus.connected;
+    const systemHealthy = recentErrors.length < 5; // Fewer than 5 errors in the last hour
+
+    return {
+      healthy: telegramHealthy && systemHealthy,
+      telegram: {
+        connected: telegramHealthy,
+        lastMessageSent: this.statusData.telegramStatus.lastSent,
+        messageCount: this.statusData.telegramStatus.messagesSent
+      },
+      system: {
+        healthy: systemHealthy,
+        recentErrorCount: recentErrors.length,
+        memoryUsage: `${this.statusData.performance.memoryUsage} MB`,
+        uptime: Date.now() - this.statusData.startTime
+      },
+      alerts: {
+        today: this.statusData.alerts.today,
+        total: this.statusData.alerts.total
+      },
+      timestamp: new Date().toISOString()
+    };
   }
 }
 
-// Export as singleton
+// Export a singleton instance
 module.exports = new StatusMonitor(); 

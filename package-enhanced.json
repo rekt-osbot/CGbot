@@ -1,14 +1,12 @@
 {
-  "name": "stock-alert-system",
-  "version": "1.0.0",
-  "description": "A Node.js application that sends stock alerts to Telegram and WhatsApp",
+  "name": "stock-alert-system-enhanced",
+  "version": "1.1.0",
+  "description": "A Node.js application that sends stock alerts to Telegram with enhanced UI",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "start:stable": "node run-stable.js",
-    "start:whatsapp": "node whatsapp-bot.js",
     "dev": "nodemon index.js",
-    "dev:whatsapp": "nodemon whatsapp-bot.js",
     "test:local": "node test-local-bot.js",
     "generate-summary": "node generate-summary.js",
     "postinstall": "echo 'Installation completed successfully'"
@@ -20,9 +18,9 @@
     "stocks",
     "alerts",
     "telegram",
-    "whatsapp",
     "webhook",
-    "chartink"
+    "dashboard",
+    "analytics"
   ],
   "author": "",
   "license": "MIT",
@@ -33,9 +31,9 @@
     "handlebars": "^4.7.8",
     "mongoose": "^7.5.0",
     "node-schedule": "^2.1.1",
-    "node-telegram-bot-api": "^0.63.0"
+    "node-telegram-bot-api": "^0.64.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
   }
-}
+} 
