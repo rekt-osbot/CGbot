@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const Handlebars = require('handlebars');
 const statusMonitor = require('./status');
-const Database = require('./database');
+const database = require('./database');
 const Analytics = require('./analytics');
 
 // Loading the dashboard template
@@ -40,8 +40,7 @@ function enhancedDashboard(req, res) {
     // Get system status
     const status = statusMonitor.getStatus();
     
-    // Check database connection
-    const database = new Database();
+    // Check database connection (using the existing database instance)
     const dbConnected = database.isConnected;
     
     // Format uptime

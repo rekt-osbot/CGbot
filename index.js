@@ -10,6 +10,7 @@ const fs = require('fs');
 const statusMonitor = require('./status');
 const Analytics = require('./analytics');
 const Database = require('./database');
+const { enhancedDashboard, apiStatus } = require('./enhanced-dashboard');
 
 // Initialize Express app
 const app = express();
@@ -1178,544 +1179,16 @@ app.get('/api/analytics', (req, res) => {
 });
 
 // Status page endpoint (HTML UI)
-app.get('/status', async (req, res) => {
+app.get('/status', enhancedDashboard);
+
+// API status endpoint (JSON) if not already defined
+app.get('/api/status', apiStatus);
+
+// Legacy status page (for backward compatibility)
+app.get('/status-legacy', async (req, res) => {
   try {
     const uptime = process.uptime();
-    const days = Math.floor(uptime / 86400);
-    const hours = Math.floor((uptime % 86400) / 3600);
-    const minutes = Math.floor((uptime % 3600) / 60);
-    const seconds = Math.floor(uptime % 60);
-    const uptimeString = `${days}d ${hours}h ${minutes}m ${seconds}s`;
-    
-    // Get MongoDB connection status
-    const dbConnected = Database.isConnected;
-    const systemStatus = dbConnected ? 'healthy' : 'database disconnected';
-    
-    // Get today's date (start of day)
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    // Get alerts from database
-    let todayAlerts = [];
-    let todayWebhooks = 0;
-    let lastAlert = null;
-    let totalAlerts = 0;
-    let totalWebhooks = statusMonitor.getTotalWebhooks() || 0;
-    let dbError = null;
-    
-    try {
-      // Try to get alerts and counts, but don't fail if database is down
-      if (dbConnected) {
-        todayAlerts = await Database.getAlertsAfterDate(today);
-        
-        // Count total alerts in DB (approximation)
-        const oneYearAgo = new Date();
-        oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-        const allAlerts = await Database.getAlertsAfterDate(oneYearAgo);
-        totalAlerts = allAlerts ? allAlerts.length : 0;
-        
-        // Get most recent alert
-        if (todayAlerts && todayAlerts.length > 0) {
-          lastAlert = todayAlerts[0]; // Assuming they're already sorted by timestamp desc
-        }
-      }
-    } catch (error) {
-      console.error('Error retrieving database metrics:', error);
-      dbError = error.message;
-      statusMonitor.recordError('database', error);
-    }
-    
-    // Calculate stats
-    const todayAlertCount = todayAlerts ? todayAlerts.length : 0;
-    
-    // Get today's webhook count and total count from StatusMonitor
-    todayWebhooks = statusMonitor.getTodayWebhooks() || 0;
-    
-    // Get recent errors
-    const recentErrors = statusMonitor.getRecentErrors();
-    let errorLog = '';
-    
-    if (recentErrors && recentErrors.length > 0) {
-      errorLog = recentErrors.map(err => `
-        <div class="error-item">
-          <div class="error-time">${new Date(err.timestamp).toLocaleTimeString()}</div>
-          <div class="error-type">${err.type}</div>
-          <div class="error-message">${err.message}</div>
-        </div>
-      `).join('');
-    } else {
-      errorLog = '<div class="no-errors"><i class="fas fa-check-circle"></i> No errors recorded recently</div>';
-    }
-    
-    // Format last alert time
-    let lastAlertTime = 'No alerts today';
-    if (lastAlert) {
-      lastAlertTime = `${lastAlert.symbol} at ${new Date(lastAlert.timestamp || lastAlert.createdAt).toLocaleTimeString()}`;
-    }
-    
-    // Prepare status HTML
-    res.send(`
-      <!DOCTYPE html>
-      <html lang="en">
-      <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <meta http-equiv="refresh" content="60">
-        <title>CGNSEAlert Dashboard</title>
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-        <style>
-          :root {
-            --primary: #4361ee;
-            --success: #2ecc71;
-            --warning: #f39c12;
-            --danger: #e74c3c;
-            --info: #3498db;
-            --light: #f8f9fa;
-            --dark: #343a40;
-            --gray: #6c757d;
-            --border: #e9ecef;
-          }
-          
-          * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-          }
-          
-          body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-            color: var(--dark);
-            background-color: #f5f7fb;
-            padding: 0;
-            margin: 0;
-          }
-          
-          .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 2rem;
-          }
-          
-          header {
-            background-color: white;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-            padding: 1.5rem 0;
-            margin-bottom: 2rem;
-          }
-          
-          .header-container {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 0 2rem;
-          }
-          
-          h1 {
-            font-size: 1.8rem;
-            color: var(--primary);
-            margin-bottom: 0.5rem;
-          }
-          
-          h2 {
-            font-size: 1.4rem;
-            margin-bottom: 1rem;
-            color: var(--dark);
-          }
-          
-          .status-badge {
-            display: inline-block;
-            padding: 0.4rem 1rem;
-            border-radius: 50px;
-            font-weight: 600;
-            font-size: 0.9rem;
-          }
-          
-          .status-badge.healthy {
-            background-color: rgba(46, 204, 113, 0.2);
-            color: var(--success);
-          }
-          
-          .status-badge.warning {
-            background-color: rgba(243, 156, 18, 0.2);
-            color: var(--warning);
-          }
-          
-          .status-badge.danger {
-            background-color: rgba(231, 76, 60, 0.2);
-            color: var(--danger);
-          }
-          
-          .panel {
-            background-color: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-            padding: 1.5rem;
-            margin-bottom: 1.5rem;
-          }
-          
-          .panel-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1.2rem;
-            padding-bottom: 0.8rem;
-            border-bottom: 1px solid rgba(0,0,0,0.05);
-          }
-          
-          .panel-title {
-            font-size: 1.2rem;
-            font-weight: 600;
-            color: var(--primary);
-            display: flex;
-            align-items: center;
-          }
-          
-          .panel-title i {
-            margin-right: 0.5rem;
-          }
-          
-          .grid-layout {
-            display: grid;
-            grid-template-columns: 3fr 2fr;
-            gap: 1.5rem;
-          }
-          
-          .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 1.2rem;
-          }
-          
-          .stat-card {
-            background-color: #f8f9fa;
-            border-radius: 8px;
-            padding: 1.2rem;
-            display: flex;
-            flex-direction: column;
-            transition: all 0.3s ease;
-          }
-          
-          .stat-card:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-          }
-          
-          .stat-title {
-            font-size: 0.9rem;
-            color: var(--gray);
-            margin-bottom: 0.8rem;
-            display: flex;
-            align-items: center;
-          }
-          
-          .stat-title i {
-            margin-right: 0.5rem;
-            color: var(--primary);
-          }
-          
-          .stat-value {
-            font-size: 1.8rem;
-            font-weight: 700;
-            color: var(--primary);
-            margin-top: auto;
-          }
-          
-          .stat-footer {
-            font-size: 0.85rem;
-            color: var(--gray);
-            margin-top: 0.8rem;
-          }
-          
-          .nav-links {
-            display: flex;
-            gap: 1.5rem;
-          }
-          
-          .nav-link {
-            color: var(--dark);
-            text-decoration: none;
-            font-weight: 500;
-            transition: color 0.2s;
-            display: flex;
-            align-items: center;
-          }
-          
-          .nav-link i {
-            margin-right: 0.5rem;
-          }
-          
-          .nav-link:hover {
-            color: var(--primary);
-          }
-          
-          .nav-link.active {
-            color: var(--primary);
-            font-weight: 600;
-          }
-          
-          .db-error {
-            background-color: #fff3cd;
-            border-left: 4px solid var(--warning);
-            padding: 1rem;
-            margin-bottom: 1.5rem;
-            border-radius: 4px;
-          }
-          
-          .db-error-title {
-            font-weight: 600;
-            color: #856404;
-            margin-bottom: 0.5rem;
-          }
-          
-          .db-error-message {
-            font-size: 0.9rem;
-          }
-          
-          .error-log {
-            background-color: var(--light);
-            border-radius: 8px;
-            overflow: hidden;
-            max-height: 300px;
-            overflow-y: auto;
-          }
-          
-          .error-item {
-            display: grid;
-            grid-template-columns: auto 1fr 2fr;
-            gap: 1rem;
-            padding: 0.8rem 1rem;
-            border-bottom: 1px solid var(--border);
-            align-items: center;
-          }
-          
-          .error-time {
-            color: var(--gray);
-            font-size: 0.9rem;
-            white-space: nowrap;
-          }
-          
-          .error-type {
-            font-weight: 600;
-            color: var(--primary);
-          }
-          
-          .error-message {
-            color: var(--danger);
-          }
-          
-          .no-errors {
-            padding: 1.5rem;
-            text-align: center;
-            color: var(--success);
-            font-weight: 500;
-          }
-          
-          .no-errors i {
-            margin-right: 0.5rem;
-          }
-          
-          .action-buttons {
-            display: flex;
-            gap: 0.8rem;
-            margin-top: 1rem;
-          }
-          
-          .btn {
-            display: inline-flex;
-            align-items: center;
-            padding: 0.5rem 1rem;
-            border-radius: 4px;
-            font-weight: 500;
-            font-size: 0.9rem;
-            cursor: pointer;
-            transition: all 0.2s;
-            text-decoration: none;
-            border: none;
-          }
-          
-          .btn i {
-            margin-right: 0.5rem;
-          }
-          
-          .btn-primary {
-            background-color: var(--primary);
-            color: white;
-          }
-          
-          .btn-primary:hover {
-            background-color: #3651cf;
-          }
-          
-          .btn-info {
-            background-color: var(--info);
-            color: white;
-          }
-          
-          .btn-info:hover {
-            background-color: #2980b9;
-          }
-          
-          .btn-success {
-            background-color: var(--success);
-            color: white;
-          }
-          
-          .btn-success:hover {
-            background-color: #27ae60;
-          }
-          
-          .current-time {
-            font-size: 0.9rem;
-            color: var(--gray);
-            text-align: center;
-            margin-top: 2rem;
-          }
-          
-          .api-link {
-            display: inline-block;
-            font-size: 0.85rem;
-            color: var(--primary);
-            text-decoration: none;
-            margin-top: 0.5rem;
-          }
-          
-          .api-link:hover {
-            text-decoration: underline;
-          }
-          
-          @media (max-width: 992px) {
-            .grid-layout {
-              grid-template-columns: 1fr;
-            }
-          }
-          
-          @media (max-width: 768px) {
-            .stats-grid {
-              grid-template-columns: repeat(2, 1fr);
-            }
-            
-            .header-container {
-              flex-direction: column;
-              text-align: center;
-            }
-            
-            .nav-links {
-              margin-top: 1rem;
-              flex-wrap: wrap;
-              justify-content: center;
-            }
-            
-            .error-item {
-              grid-template-columns: 1fr;
-            }
-          }
-          
-          @media (max-width: 576px) {
-            .stats-grid {
-              grid-template-columns: 1fr;
-            }
-          }
-        </style>
-      </head>
-      <body>
-        <header>
-          <div class="header-container">
-            <div>
-              <h1>CGNSEAlert Dashboard</h1>
-              <span class="status-badge ${dbConnected ? 'healthy' : 'warning'}">
-                <i class="fas ${dbConnected ? 'fa-check-circle' : 'fa-exclamation-circle'}"></i> 
-                ${dbConnected ? 'System Healthy' : 'Database Disconnected'}
-              </span>
-            </div>
-            <div class="nav-links">
-              <a href="/status" class="nav-link active"><i class="fas fa-tachometer-alt"></i> Dashboard</a>
-              <a href="/analytics" class="nav-link"><i class="fas fa-chart-pie"></i> Analytics</a>
-              <a href="/test-webhook-dashboard" class="nav-link"><i class="fas fa-paper-plane"></i> Test Webhook</a>
-              <a href="/resend-alerts" class="nav-link"><i class="fas fa-redo"></i> Resend Alerts</a>
-              <a href="/health" class="nav-link"><i class="fas fa-heartbeat"></i> Health</a>
-            </div>
-          </div>
-        </header>
-        
-        <div class="container">
-          ${dbError ? `
-            <div class="db-error">
-              <div class="db-error-title"><i class="fas fa-exclamation-triangle"></i> Database Connection Error</div>
-              <div class="db-error-message">${dbError}</div>
-              <div class="db-error-message">Some features may be limited. Please check your MongoDB connection settings.</div>
-            </div>
-          ` : ''}
-          
-          <div class="grid-layout">
-            <div>
-              <div class="panel">
-                <div class="panel-header">
-                  <div class="panel-title">
-                    <i class="fas fa-chart-line"></i> System Overview
-                  </div>
-                </div>
-                
-                <div class="stats-grid">
-                  <div class="stat-card">
-                    <div class="stat-title"><i class="fas fa-clock"></i> Uptime</div>
-                    <div class="stat-value">${uptimeString}</div>
-                    <div class="stat-footer">Started: ${new Date(Date.now() - uptime * 1000).toLocaleString()}</div>
-                  </div>
-                  
-                  <div class="stat-card">
-                    <div class="stat-title"><i class="fas fa-bell"></i> Today's Alerts</div>
-                    <div class="stat-value">${todayAlertCount}</div>
-                    <div class="stat-footer">Last: ${lastAlertTime}</div>
-                  </div>
-                  
-                  <div class="stat-card">
-                    <div class="stat-title"><i class="fas fa-paper-plane"></i> Today's Webhooks</div>
-                    <div class="stat-value">${todayWebhooks}</div>
-                    <div class="stat-footer">Total: ${totalWebhooks}</div>
-                  </div>
-                  
-                  <div class="stat-card">
-                    <div class="stat-title"><i class="fas fa-database"></i> Total Alerts</div>
-                    <div class="stat-value">${totalAlerts}</div>
-                    <div class="stat-footer">All time</div>
-                  </div>
-                </div>
-                
-                <div class="action-buttons">
-                  <a href="/test-telegram" class="btn btn-primary"><i class="fas fa-paper-plane"></i> Test Telegram</a>
-                  <a href="/test-webhook-dashboard" class="btn btn-info"><i class="fas fa-code"></i> Test Webhook</a>
-                  <a href="/daily-summary" class="btn btn-success"><i class="fas fa-calendar-day"></i> Generate Summary</a>
-                </div>
-              </div>
-            </div>
-            
-            <div>
-              <div class="panel">
-                <div class="panel-header">
-                  <div class="panel-title">
-                    <i class="fas fa-exclamation-circle"></i> Error Log
-                  </div>
-                </div>
-                
-                <div class="error-log">
-                  ${errorLog}
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <div class="current-time">
-            Dashboard refreshes automatically every minute. Last updated: ${new Date().toLocaleString()}
-          </div>
-          
-          <a href="/api/status" class="api-link">View JSON API response →</a>
-        </div>
-      </body>
-      </html>
-    `);
+    // ... existing code ...
   } catch (error) {
     console.error('Error rendering status page:', error);
     res.status(500).send('Error generating status page: ' + error.message);
@@ -2792,4 +2265,603 @@ const server = app.listen(PORT, async () => {
     console.log('WARNING: Telegram connection failed, but webhook server is still running.');
     console.log('Alerts will be processed but not sent to Telegram until the connection issue is resolved.');
   }
-}); 
+});
+
+// Add handler for test-webhook-dashboard route
+app.get('/test-webhook-dashboard', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Test Webhook - Stock Alerts Dashboard</title>
+      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+      <style>
+        :root {
+          --primary: #4361ee;
+          --primary-light: #eef1ff;
+          --primary-dark: #3651cf;
+          --success: #10b981;
+          --success-light: #ecfdf5;
+          --warning: #f59e0b;
+          --warning-light: #fffbeb;
+          --danger: #ef4444;
+          --danger-light: #fef2f2;
+          --info: #3b82f6;
+          --info-light: #eff6ff;
+          --gray: #6b7280;
+          --gray-light: #f3f4f6;
+          --dark: #1f2937;
+          --border: #e5e7eb;
+          --text: #374151;
+          --text-light: #6b7280;
+          --bg: #f9fafb;
+          --white: #ffffff;
+          --radius: 0.5rem;
+          --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+        }
+        
+        * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+          font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+        
+        body {
+          background-color: var(--bg);
+          color: var(--text);
+          line-height: 1.5;
+          padding: 2rem;
+        }
+        
+        .container {
+          max-width: 800px;
+          margin: 0 auto;
+        }
+        
+        h1 {
+          margin-bottom: 1.5rem;
+          color: var(--dark);
+        }
+        
+        .card {
+          background-color: var(--white);
+          border-radius: var(--radius);
+          box-shadow: var(--shadow);
+          padding: 1.5rem;
+          margin-bottom: 1.5rem;
+        }
+        
+        .form-group {
+          margin-bottom: 1.5rem;
+        }
+        
+        label {
+          display: block;
+          font-weight: 500;
+          margin-bottom: 0.5rem;
+          color: var(--dark);
+        }
+        
+        input, textarea, select {
+          width: 100%;
+          padding: 0.75rem;
+          border: 1px solid var(--border);
+          border-radius: var(--radius);
+          font-size: 1rem;
+          transition: border-color 0.2s;
+        }
+        
+        input:focus, textarea:focus, select:focus {
+          outline: none;
+          border-color: var(--primary);
+        }
+        
+        textarea {
+          min-height: 150px;
+          resize: vertical;
+        }
+        
+        .btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 1rem;
+          font-weight: 500;
+          padding: 0.75rem 1.5rem;
+          border-radius: var(--radius);
+          border: none;
+          cursor: pointer;
+          transition: all 0.2s;
+          text-decoration: none;
+        }
+        
+        .btn i {
+          margin-right: 0.5rem;
+        }
+        
+        .btn-primary {
+          background-color: var(--primary);
+          color: var(--white);
+        }
+        
+        .btn-primary:hover {
+          background-color: var(--primary-dark);
+        }
+        
+        .btn-outline {
+          background-color: transparent;
+          border: 1px solid var(--border);
+          color: var(--text);
+        }
+        
+        .btn-outline:hover {
+          background-color: var(--gray-light);
+        }
+        
+        .template-selector {
+          margin-bottom: 1rem;
+        }
+        
+        .back-link {
+          display: inline-flex;
+          align-items: center;
+          color: var(--primary);
+          text-decoration: none;
+          font-weight: 500;
+          margin-bottom: 1rem;
+        }
+        
+        .back-link i {
+          margin-right: 0.5rem;
+        }
+        
+        .back-link:hover {
+          text-decoration: underline;
+        }
+        
+        .response {
+          margin-top: 1.5rem;
+          padding: 1rem;
+          background-color: var(--dark);
+          color: var(--white);
+          border-radius: var(--radius);
+          font-family: monospace;
+          white-space: pre-wrap;
+          max-height: 300px;
+          overflow-y: auto;
+        }
+        
+        .alert {
+          padding: 0.75rem 1rem;
+          border-radius: var(--radius);
+          margin-bottom: 1rem;
+        }
+        
+        .alert-success {
+          background-color: var(--success-light);
+          color: var(--success);
+        }
+        
+        .alert-error {
+          background-color: var(--danger-light);
+          color: var(--danger);
+        }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <a href="/status" class="back-link">
+          <i class="fas fa-arrow-left"></i> Back to Dashboard
+        </a>
+        
+        <h1>Test Webhook</h1>
+        
+        <div class="card">
+          <form id="webhookForm">
+            <div class="form-group template-selector">
+              <label for="template">Select Webhook Template</label>
+              <select id="template" name="template" class="form-control">
+                <option value="single">Single Stock Alert</option>
+                <option value="multiple">Multiple Stocks Alert</option>
+                <option value="chartink">Chartink Format</option>
+                <option value="custom">Custom JSON</option>
+              </select>
+            </div>
+            
+            <div class="form-group">
+              <label for="webhook-data">Webhook Payload (JSON)</label>
+              <textarea id="webhook-data" name="webhook-data" class="form-control"></textarea>
+            </div>
+            
+            <button type="submit" class="btn btn-primary">
+              <i class="fas fa-paper-plane"></i> Send Test Webhook
+            </button>
+          </form>
+          
+          <div id="responseSection" style="display: none;">
+            <h3 style="margin-top: 1.5rem;">Response</h3>
+            <div id="responseData" class="response"></div>
+          </div>
+        </div>
+      </div>
+      
+      <script>
+        // Template data
+        const templates = {
+          single: {
+            symbol: "SBIN",
+            scan_name: "Breakout Scan",
+            trigger_price: 624.50,
+            triggered_at: new Date().toLocaleString()
+          },
+          multiple: {
+            scan_name: "Multiple Stocks Scan",
+            triggered_at: new Date().toLocaleString(),
+            stocks: [
+              { symbol: "RELIANCE", trigger_price: 2840.75 },
+              { symbol: "INFY", trigger_price: 1670.25 },
+              { symbol: "HDFCBANK", trigger_price: 1580.60 }
+            ]
+          },
+          chartink: {
+            alert_name: "Chartink Breakout",
+            scan_name: "Volume Breakout",
+            scan_url: "https://chartink.com/screener/volume-breakout",
+            stocks: "TATAMOTORS",
+            trigger_prices: 950.25,
+            triggered_at: new Date().toLocaleString()
+          },
+          custom: {
+            // Empty for custom input
+          }
+        };
+        
+        // Populate textarea based on selected template
+        document.getElementById('template').addEventListener('change', function() {
+          const selected = this.value;
+          const data = templates[selected];
+          
+          if (selected === 'custom') {
+            document.getElementById('webhook-data').value = '{\n  "symbol": "YOURSTOCK",\n  "scan_name": "Your Scan",\n  "trigger_price": 100.50\n}';
+          } else {
+            document.getElementById('webhook-data').value = JSON.stringify(data, null, 2);
+          }
+        });
+        
+        // Trigger change event to populate initial template
+        document.getElementById('template').dispatchEvent(new Event('change'));
+        
+        // Form submission
+        document.getElementById('webhookForm').addEventListener('submit', async function(e) {
+          e.preventDefault();
+          
+          const webhookData = document.getElementById('webhook-data').value;
+          
+          try {
+            // Parse the JSON to validate it
+            const jsonData = JSON.parse(webhookData);
+            
+            // Show a loading state
+            const submitBtn = this.querySelector('button[type="submit"]');
+            const originalText = submitBtn.innerHTML;
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending...';
+            submitBtn.disabled = true;
+            
+            // Send the webhook
+            const response = await fetch('/webhook', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: webhookData
+            });
+            
+            // Parse the response
+            const responseData = await response.json();
+            
+            // Show the response
+            document.getElementById('responseSection').style.display = 'block';
+            document.getElementById('responseData').textContent = JSON.stringify(responseData, null, 2);
+            
+            // Reset button state
+            submitBtn.innerHTML = originalText;
+            submitBtn.disabled = false;
+            
+            // Scroll to response
+            document.getElementById('responseSection').scrollIntoView({ behavior: 'smooth' });
+            
+          } catch (error) {
+            alert('Invalid JSON payload. Please check your input and try again.');
+            console.error('Error:', error);
+          }
+        });
+      </script>
+    </body>
+    </html>
+  `);
+});
+
+// Add handler for viewing all alerts
+app.get('/alerts', async (req, res) => {
+  try {
+    // Connect to database
+    await database.connect();
+    
+    // Get alerts from database (most recent first)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // Default to showing today's alerts or all alerts from past week if no date parameter
+    const startDate = req.query.date ? new Date(req.query.date) : new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+    
+    let alerts = [];
+    
+    if (database.isConnected) {
+      alerts = await database.getAlertsAfterDate(startDate);
+    } else {
+      // If database not connected, use alerts from status monitor
+      alerts = statusMonitor.getStatus().alerts.recent || [];
+    }
+    
+    // Format date for display
+    const startDateFormatted = startDate.toLocaleDateString();
+    
+    // Send HTML response
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>All Alerts - Stock Alerts Dashboard</title>
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+        <style>
+          :root {
+            --primary: #4361ee;
+            --primary-light: #eef1ff;
+            --primary-dark: #3651cf;
+            --success: #10b981;
+            --success-light: #ecfdf5;
+            --warning: #f59e0b;
+            --warning-light: #fffbeb;
+            --danger: #ef4444;
+            --danger-light: #fef2f2;
+            --info: #3b82f6;
+            --info-light: #eff6ff;
+            --gray: #6b7280;
+            --gray-light: #f3f4f6;
+            --dark: #1f2937;
+            --border: #e5e7eb;
+            --text: #374151;
+            --text-light: #6b7280;
+            --bg: #f9fafb;
+            --white: #ffffff;
+            --radius: 0.5rem;
+            --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+          }
+          
+          * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+          }
+          
+          body {
+            background-color: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+            padding-bottom: 2rem;
+          }
+          
+          .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem 1rem;
+          }
+          
+          h1 {
+            margin-bottom: 1.5rem;
+            color: var(--dark);
+          }
+          
+          .card {
+            background-color: var(--white);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            margin-bottom: 1.5rem;
+            overflow: hidden;
+          }
+          
+          .card-header {
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+          }
+          
+          .card-title {
+            font-weight: 600;
+            font-size: 1.125rem;
+            color: var(--dark);
+            display: flex;
+            align-items: center;
+          }
+          
+          .card-title i {
+            margin-right: 0.5rem;
+            color: var(--primary);
+          }
+          
+          .filter-form {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+          }
+          
+          .filter-form label {
+            font-weight: 500;
+            font-size: 0.875rem;
+          }
+          
+          .filter-form input {
+            padding: 0.5rem;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+          }
+          
+          .filter-form button {
+            padding: 0.5rem 1rem;
+            background-color: var(--primary);
+            color: var(--white);
+            border: none;
+            border-radius: var(--radius);
+            cursor: pointer;
+            transition: background-color 0.2s;
+          }
+          
+          .filter-form button:hover {
+            background-color: var(--primary-dark);
+          }
+          
+          .table {
+            width: 100%;
+            border-collapse: collapse;
+          }
+          
+          .table th, .table td {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+          }
+          
+          .table th {
+            font-weight: 600;
+            color: var(--text);
+            background-color: var(--gray-light);
+          }
+          
+          .table tr:last-child td {
+            border-bottom: none;
+          }
+          
+          .empty-state {
+            padding: 2rem;
+            text-align: center;
+            color: var(--text-light);
+          }
+          
+          .empty-state i {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            color: var(--gray);
+          }
+          
+          .empty-state-title {
+            font-weight: 600;
+            font-size: 1.125rem;
+            margin-bottom: 0.5rem;
+            color: var(--text);
+          }
+          
+          .back-link {
+            display: inline-flex;
+            align-items: center;
+            color: var(--primary);
+            text-decoration: none;
+            font-weight: 500;
+            margin-bottom: 1rem;
+          }
+          
+          .back-link i {
+            margin-right: 0.5rem;
+          }
+          
+          .back-link:hover {
+            text-decoration: underline;
+          }
+          
+          .positive {
+            color: var(--success);
+          }
+          
+          .negative {
+            color: var(--danger);
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <a href="/status" class="back-link">
+            <i class="fas fa-arrow-left"></i> Back to Dashboard
+          </a>
+          
+          <h1>All Alerts</h1>
+          
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <i class="fas fa-bell"></i> Stock Alerts
+              </div>
+              
+              <form class="filter-form" method="GET">
+                <label for="date">From Date:</label>
+                <input type="date" id="date" name="date" value="${startDate.toISOString().split('T')[0]}">
+                <button type="submit">Filter</button>
+              </form>
+            </div>
+            
+            ${alerts.length > 0 ? `
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Scan</th>
+                    <th>Price</th>
+                    <th>% Change</th>
+                    <th>SMA20</th>
+                    <th>Date/Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${alerts.map(alert => `
+                    <tr>
+                      <td><strong>${alert.symbol}</strong></td>
+                      <td>${alert.scanName || alert.scan_name || 'N/A'}</td>
+                      <td>${alert.alertPrice || alert.trigger_price || alert.price || 'N/A'}</td>
+                      <td class="${(alert.percentChange || 0) >= 0 ? 'positive' : 'negative'}">${alert.percentChange ? alert.percentChange.toFixed(2) + '%' : 'N/A'}</td>
+                      <td>${alert.sma20 ? alert.sma20.toFixed(2) : 'N/A'}</td>
+                      <td>${new Date(alert.timestamp || alert.triggered_at || alert.createdAt).toLocaleString()}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            ` : `
+              <div class="empty-state">
+                <i class="fas fa-inbox"></i>
+                <div class="empty-state-title">No Alerts Found</div>
+                <p>No stock alerts were found for the selected time period.</p>
+              </div>
+            `}
+          </div>
+        </div>
+      </body>
+      </html>
+    `);
+  } catch (error) {
+    console.error('Error generating alerts page:', error);
+    res.status(500).send(`
+      <h1>Error</h1>
+      <p>Error generating alerts page: ${error.message}</p>
+      <a href="/status">Back to Dashboard</a>
+    `);
+  }
+});
+
+// ... existing code ... 
